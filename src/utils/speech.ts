@@ -349,3 +349,4 @@ class SpeechService {
 }
 
 export const speechService = new SpeechService();
+export { useTTS } from '../hooks/useTTS';

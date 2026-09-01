@@ -38,6 +38,7 @@ export const Step4Interview: React.FC = () => {
   const currentQuestion = questions[currentIndex] || questions[0];
 
   const [currentSelected, setCurrentSelected] = useState<string | undefined>(undefined);
+  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const [customFreeText, setCustomFreeText] = useState<string>('');
 
   // Voice Speech-To-Text and AI Option Matching State
@@ -78,13 +79,30 @@ export const Step4Interview: React.FC = () => {
     // 3. Populate existing answer if patient previously answered this question
     const prevAns = kioskPatient.historyAnswers?.[currentQuestion.id];
     if (prevAns) {
-      const match = currentQuestion.options.find(
-        (o) => o.text_en === prevAns.answer_en || o.text_hi === prevAns.answer_hi
-      );
-      if (match) setCurrentSelected(match.id);
-      else setCustomFreeText(prevAns.answer_en || '');
+      if (currentQuestion.input_type === 'multi_select') {
+        const prevTextEn = prevAns.answer_en || '';
+        const prevTextHi = prevAns.answer_hi || '';
+        const matched = currentQuestion.options.filter(
+          (o) => prevTextEn.includes(o.text_en) || prevTextHi.includes(o.text_hi)
+        );
+        setSelectedOptionIds(matched.map((o) => o.id));
+        setCurrentSelected(undefined);
+        setCustomFreeText('');
+      } else if (currentQuestion.input_type === 'single_select') {
+        const match = currentQuestion.options.find(
+          (o) => o.text_en === prevAns.answer_en || o.text_hi === prevAns.answer_hi
+        );
+        if (match) setCurrentSelected(match.id);
+        setSelectedOptionIds([]);
+        setCustomFreeText('');
+      } else {
+        setCustomFreeText(prevAns.answer_en || '');
+        setCurrentSelected(undefined);
+        setSelectedOptionIds([]);
+      }
     } else {
       setCurrentSelected(undefined);
+      setSelectedOptionIds([]);
       setCustomFreeText('');
     }
 
@@ -107,9 +125,33 @@ export const Step4Interview: React.FC = () => {
     }
   }, [currentQuestion.id, currentIndex, language, questions, autoVoiceEnabled]);
 
-  // Primary option selection code path (invoked by clicking chip OR programmatically via voice matching)
+  // Option selection handler for both single and multi-select
   const handleSelectOption = (option: QuestionOption) => {
-    setCurrentSelected(option.id);
+    if (currentQuestion.input_type === 'multi_select') {
+      const isNoneOption =
+        option.id.includes('none') ||
+        option.id.includes('no') ||
+        option.id === 'surg_no';
+
+      if (isNoneOption) {
+        setSelectedOptionIds((prev) =>
+          prev.includes(option.id) ? [] : [option.id]
+        );
+      } else {
+        setSelectedOptionIds((prev) => {
+          const withoutNone = prev.filter(
+            (id) => !id.includes('none') && !id.includes('no') && id !== 'surg_no'
+          );
+          if (withoutNone.includes(option.id)) {
+            return withoutNone.filter((id) => id !== option.id);
+          } else {
+            return [...withoutNone, option.id];
+          }
+        });
+      }
+    } else {
+      setCurrentSelected(option.id);
+    }
   };
 
   // Handle Speech-to-Text and Gemini AI Option Matching Flow
@@ -178,24 +220,58 @@ export const Step4Interview: React.FC = () => {
           let instantMatchedOption: QuestionOption | null = null;
 
           if (localSemanticResult.matchedIds && localSemanticResult.matchedIds.length > 0) {
-            instantMatchedOption =
-              currentQuestion.options.find((opt) => opt.id === localSemanticResult.matchedIds[0]) ||
-              null;
+            if (currentQuestion.input_type === 'multi_select') {
+              const matchedOpts = currentQuestion.options.filter((opt) =>
+                localSemanticResult.matchedIds.includes(opt.id)
+              );
+              if (matchedOpts.length > 0) {
+                if (activeQuestionIdRef.current !== targetQuestionId) return;
+                setSelectedOptionIds((prev) => {
+                  const newIds = matchedOpts.map((o) => o.id);
+                  const containsNone = newIds.some((id) => id.includes('none'));
+                  if (containsNone) return newIds.filter((id) => id.includes('none'));
+                  const withoutNone = prev.filter((id) => !id.includes('none'));
+                  return Array.from(new Set([...withoutNone, ...newIds]));
+                });
+                const names = matchedOpts
+                  .map((o) => (language === 'hi' ? o.text_hi : o.text_en))
+                  .join(', ');
+                setVoiceFeedback({
+                  text: language === 'hi' ? `चयनित: ${names}` : `Voice Selected: ${names}`,
+                  type: 'success',
+                });
+                speechService.playChime('success');
+              }
+            } else {
+              instantMatchedOption =
+                currentQuestion.options.find((opt) => opt.id === localSemanticResult.matchedIds[0]) ||
+                null;
+              if (instantMatchedOption) {
+                if (activeQuestionIdRef.current !== targetQuestionId) return;
+                handleSelectOption(instantMatchedOption);
+                setVoiceFeedback({
+                  text:
+                    language === 'hi'
+                      ? `चयनित: ${instantMatchedOption.text_hi}`
+                      : `Voice Selected: ${instantMatchedOption.text_en}`,
+                  type: 'success',
+                });
+                speechService.playChime('success');
+              }
+            }
           }
 
-          if (instantMatchedOption) {
+          if (!instantMatchedOption && currentQuestion.input_type !== 'multi_select') {
             if (activeQuestionIdRef.current !== targetQuestionId) return;
-            handleSelectOption(instantMatchedOption);
+            setIsMatchingVoice(true);
             setVoiceFeedback({
               text:
                 language === 'hi'
-                  ? `चयनित: ${instantMatchedOption.text_hi}`
-                  : `Voice Selected: ${instantMatchedOption.text_en}`,
-              type: 'success',
+                  ? `Gemini AI सटीक उत्तर खोज रहा है... ("${rawTranscript}")`
+                  : `Matching precise option via Gemini AI... ("${rawTranscript}")`,
+              type: 'info',
             });
-            speechService.playChime('success');
-          } else {
-            if (activeQuestionIdRef.current !== targetQuestionId) return;
+          } else if (currentQuestion.input_type === 'multi_select') {
             setIsMatchingVoice(true);
             setVoiceFeedback({
               text:
@@ -232,8 +308,17 @@ export const Step4Interview: React.FC = () => {
               );
 
               if (matchedOptions.length > 0) {
-                // Programmatically trigger the same selection state update as tapping on the chip
-                handleSelectOption(matchedOptions[0]);
+                if (currentQuestion.input_type === 'multi_select') {
+                  setSelectedOptionIds((prev) => {
+                    const newIds = matchedOptions.map((o) => o.id);
+                    const containsNone = newIds.some((id) => id.includes('none'));
+                    if (containsNone) return newIds.filter((id) => id.includes('none'));
+                    const withoutNone = prev.filter((id) => !id.includes('none'));
+                    return Array.from(new Set([...withoutNone, ...newIds]));
+                  });
+                } else {
+                  handleSelectOption(matchedOptions[0]);
+                }
 
                 const optionNames = matchedOptions
                   .map((opt) => (language === 'hi' ? opt.text_hi : opt.text_en))
@@ -356,24 +441,36 @@ export const Step4Interview: React.FC = () => {
     setIsListening(false);
     setIsMatchingVoice(false);
 
-    let chosenOption: QuestionOption | undefined;
-    let customText: string | undefined;
+    let textEn = '';
+    let textHi = '';
+    let hasRedFlag = false;
+    let redFlagReason: string | undefined = undefined;
 
     if (currentQuestion.input_type === 'free_text') {
-      chosenOption = {
-        id: 'free_text_entry',
-        text_en: customFreeText || 'Not specified',
-        text_hi: customFreeText || 'कोई विवरण नहीं',
-      };
-      customText = customFreeText;
+      if (!customFreeText.trim()) return;
+      textEn = customFreeText.trim();
+      textHi = customFreeText.trim();
+    } else if (currentQuestion.input_type === 'multi_select') {
+      if (selectedOptionIds.length === 0) return;
+      const chosenOptions = currentQuestion.options.filter((o) =>
+        selectedOptionIds.includes(o.id)
+      );
+      if (chosenOptions.length === 0) return;
+      textEn = chosenOptions.map((o) => o.text_en).join('; ');
+      textHi = chosenOptions.map((o) => o.text_hi).join('; ');
+      const rfOption = chosenOptions.find((o) => o.red_flag);
+      if (rfOption) {
+        hasRedFlag = true;
+        redFlagReason = rfOption.red_flag_reason;
+      }
     } else {
-      chosenOption = currentQuestion.options.find((o) => o.id === currentSelected);
+      const chosen = currentQuestion.options.find((o) => o.id === currentSelected);
+      if (!chosen) return;
+      textEn = chosen.text_en;
+      textHi = chosen.text_hi;
+      hasRedFlag = !!chosen.red_flag;
+      redFlagReason = chosen.red_flag_reason;
     }
-
-    if (!chosenOption) return;
-
-    const textEn = customText || chosenOption.text_en;
-    const textHi = customText || chosenOption.text_hi;
 
     saveKioskAnswer(
       currentQuestion.id,
@@ -382,8 +479,8 @@ export const Step4Interview: React.FC = () => {
       currentQuestion.section,
       textEn,
       textHi,
-      chosenOption.red_flag,
-      chosenOption.red_flag_reason
+      hasRedFlag,
+      redFlagReason
     );
 
     // If next question exists
@@ -417,23 +514,32 @@ export const Step4Interview: React.FC = () => {
   };
 
   const hasActiveRedFlag =
-    currentQuestion.options.find((o) => o.id === currentSelected)?.red_flag ||
+    (currentQuestion.input_type === 'multi_select'
+      ? currentQuestion.options.some((o) => selectedOptionIds.includes(o.id) && o.red_flag)
+      : currentQuestion.options.find((o) => o.id === currentSelected)?.red_flag) ||
     (kioskPatient.redFlags && kioskPatient.redFlags.length > 0);
 
   const activeRedFlagReason =
-    currentQuestion.options.find((o) => o.id === currentSelected)?.red_flag_reason ||
+    (currentQuestion.input_type === 'multi_select'
+      ? currentQuestion.options.find((o) => selectedOptionIds.includes(o.id) && o.red_flag)?.red_flag_reason
+      : currentQuestion.options.find((o) => o.id === currentSelected)?.red_flag_reason) ||
     kioskPatient.redFlags?.[0] ||
     'Patient reports urgent acute discomfort requiring fast-track triage.';
+
+  const isNextDisabled =
+    (currentQuestion.input_type === 'single_select' && !currentSelected) ||
+    (currentQuestion.input_type === 'multi_select' && selectedOptionIds.length === 0) ||
+    (currentQuestion.input_type === 'free_text' && !customFreeText.trim());
 
   return (
     <div
       id="step-4-interview-container"
-      className="w-full max-w-7xl mx-auto flex flex-col space-y-6 animate-fadeIn text-left"
+      className="w-full max-w-7xl mx-auto flex flex-col space-y-5 animate-fadeIn text-left"
     >
-      {/* 12-Column Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Main Left Section (8 Cols) */}
-        <section className="col-span-12 lg:col-span-8 flex flex-col space-y-6">
+      {/* Relative Width Layout for Laptop / Desktop screens (69-70% main, 28-30% sidebar) */}
+      <div className="w-full flex flex-col lg:flex-row items-start gap-5 xl:gap-6">
+        {/* Main Left Section (Relative ~69-70% Width) */}
+        <section className="w-full lg:w-[69%] xl:w-[70%] flex flex-col space-y-4 sm:space-y-5 min-w-0">
           {/* Section Indicator & Dual Headings */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
@@ -441,15 +547,22 @@ export const Step4Interview: React.FC = () => {
                 Section: {currentQuestion.section.replace(/_/g, ' ')} |{' '}
                 {language === 'hi' ? 'नैदानिक पूछताछ' : 'Clinical Interview'}
               </span>
-              <span className="text-xs font-extrabold px-2.5 py-1 bg-slate-200 text-slate-700 rounded-md">
-                {currentIndex + 1} / {questions.length}
-              </span>
+              <div className="flex items-center gap-2">
+                {currentQuestion.input_type === 'multi_select' && (
+                  <span className="text-[11px] font-extrabold px-2.5 py-0.5 bg-blue-100 text-blue-800 rounded-md border border-blue-200">
+                    {language === 'hi' ? 'एक से अधिक चुनें' : 'Multi-Select'}
+                  </span>
+                )}
+                <span className="text-xs font-extrabold px-2.5 py-1 bg-slate-200 text-slate-700 rounded-md">
+                  {currentIndex + 1} / {questions.length}
+                </span>
+              </div>
             </div>
 
-            <h2 className="text-3xl sm:text-4xl font-extrabold leading-tight text-[#102A43]">
+            <h2 className="text-2xl sm:text-3xl lg:text-3.5xl font-extrabold leading-tight text-[#102A43]">
               {language === 'hi' ? currentQuestion.question_hi : currentQuestion.question_en}
             </h2>
-            <h3 className="text-2xl sm:text-3xl font-bold text-slate-600 leading-snug">
+            <h3 className="text-xl sm:text-2xl font-bold text-slate-600 leading-snug">
               {language === 'hi' ? currentQuestion.question_en : currentQuestion.question_hi}
             </h3>
           </div>
@@ -457,11 +570,11 @@ export const Step4Interview: React.FC = () => {
           {/* Voice Input "Speak Answer" Action Bar */}
           <div
             id="voice-speak-answer-bar"
-            className="w-full p-4 sm:p-5 rounded-2xl bg-[#F8FAFC] border-2 border-slate-200 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 transition-all"
+            className="w-full p-4 rounded-2xl bg-[#F8FAFC] border-2 border-slate-200 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 transition-all"
           >
             <div className="flex items-center gap-3">
               <div
-                className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-colors ${
+                className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 transition-colors ${
                   isListening
                     ? 'bg-red-500 text-white animate-pulse shadow-md shadow-red-200'
                     : isMatchingVoice
@@ -470,16 +583,16 @@ export const Step4Interview: React.FC = () => {
                 }`}
               >
                 {isMatchingVoice ? (
-                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <Loader2 className="w-5 h-5 animate-spin" />
                 ) : isListening ? (
-                  <Mic className="w-6 h-6 animate-bounce" />
+                  <Mic className="w-5 h-5 animate-bounce" />
                 ) : (
-                  <Mic className="w-6 h-6" />
+                  <Mic className="w-5 h-5" />
                 )}
               </div>
 
               <div className="text-left">
-                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                   {language === 'hi' ? 'आवाज से उत्तर दें' : 'Speak Answer Flow'}
                 </p>
                 <p className="text-sm sm:text-base font-bold text-[#102A43]">
@@ -503,7 +616,7 @@ export const Step4Interview: React.FC = () => {
               id="btn-trigger-speak-answer"
               type="button"
               onClick={handleToggleVoiceAnswer}
-              className={`px-6 py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 cursor-pointer transition-all border-2 shadow-xs ${
+              className={`px-5 py-2.5 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 cursor-pointer transition-all border-2 shadow-xs shrink-0 ${
                 isListening
                   ? 'bg-red-500 hover:bg-red-600 text-white border-red-600 animate-pulse'
                   : 'bg-white hover:bg-slate-50 text-[#102A43] border-slate-300 hover:border-[#102A43]'
@@ -527,7 +640,7 @@ export const Step4Interview: React.FC = () => {
           {(voiceTranscript || voiceFeedback) && (
             <div
               id="voice-transcript-feedback-box"
-              className={`p-4 rounded-xl border flex items-start gap-3 text-sm font-medium transition-all ${
+              className={`p-3.5 rounded-xl border flex items-start gap-3 text-sm font-medium transition-all ${
                 voiceFeedback?.type === 'success'
                   ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
                   : voiceFeedback?.type === 'warning'
@@ -556,21 +669,29 @@ export const Step4Interview: React.FC = () => {
             </div>
           )}
 
-          {/* Options Grid (2-Column Polish Cards) */}
-          {currentQuestion.input_type === 'single_select' ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Options Grid: repeat(auto-fit, minmax(220px, 1fr)) */}
+          {currentQuestion.input_type !== 'free_text' ? (
+            <div
+              className="grid gap-3.5 sm:gap-4 w-full"
+              style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}
+            >
               {currentQuestion.options.map((opt, idx) => (
                 <OptionChip
                   key={opt.id}
                   option={opt}
                   index={idx}
-                  isSelected={currentSelected === opt.id}
+                  isMultiSelect={currentQuestion.input_type === 'multi_select'}
+                  isSelected={
+                    currentQuestion.input_type === 'multi_select'
+                      ? selectedOptionIds.includes(opt.id)
+                      : currentSelected === opt.id
+                  }
                   onSelect={handleSelectOption}
                 />
               ))}
             </div>
           ) : (
-            <div className="space-y-3 bg-white p-6 rounded-2xl border-2 border-slate-200 shadow-xs">
+            <div className="space-y-3 bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs">
               <label className="block text-base font-bold text-slate-800">
                 {language === 'hi'
                   ? 'अपना उत्तर यहां लिखें या बोलें:'
@@ -586,14 +707,14 @@ export const Step4Interview: React.FC = () => {
                     ? 'अपनी तकलीफ का विस्तार से वर्णन करें...'
                     : 'Describe your symptoms in your own words...'
                 }
-                className="w-full p-4 rounded-xl border-2 border-slate-300 focus:border-[#102A43] focus:ring-4 focus:ring-slate-100 text-lg font-medium text-slate-900"
+                className="w-full p-4 rounded-xl border-2 border-slate-300 focus:border-[#102A43] focus:ring-4 focus:ring-slate-100 text-base sm:text-lg font-medium text-slate-900"
               />
             </div>
           )}
 
           {/* Clinical Rationale Hint */}
           {currentQuestion.clinical_rationale && (
-            <div className="p-3.5 bg-white border border-slate-200 rounded-xl flex items-start gap-2.5 text-xs text-slate-600 shadow-2xs">
+            <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-start gap-2.5 text-xs text-slate-600 shadow-2xs">
               <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <span className="font-bold text-slate-900">
@@ -605,17 +726,17 @@ export const Step4Interview: React.FC = () => {
           )}
         </section>
 
-        {/* Aside / Doctor's Real-Time Summary Sidebar (4 Cols) */}
-        <aside className="col-span-12 lg:col-span-4 bg-white border border-slate-200 rounded-2xl p-6 sm:p-7 flex flex-col space-y-6 shadow-xs">
+        {/* Aside / Doctor's Real-Time Summary Sidebar (Relative ~28-30% Width) */}
+        <aside className="w-full lg:w-[31%] xl:w-[30%] bg-white border border-slate-200 rounded-2xl p-5 xl:p-6 flex flex-col space-y-4 xl:space-y-5 shadow-2xs shrink-0 lg:sticky lg:top-4">
           {/* Doctor Real-time View Header */}
-          <div className="pb-4 border-b border-slate-100 space-y-3">
+          <div className="pb-3 border-b border-slate-100 space-y-2.5">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
               Doctor's Real-time View / चिकित्सक पूर्वावलोकन
             </h3>
 
             {/* Critical Red Flag Box if present */}
             {hasActiveRedFlag ? (
-              <div className="bg-red-50 border border-red-200 rounded-xl p-4 space-y-1">
+              <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 space-y-1">
                 <div className="flex items-center space-x-2 text-red-600">
                   <AlertTriangle className="w-4 h-4" />
                   <span className="text-xs font-black uppercase tracking-wider">
@@ -627,7 +748,7 @@ export const Step4Interview: React.FC = () => {
                 </p>
               </div>
             ) : (
-              <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 flex items-center gap-2 text-xs font-bold text-emerald-800">
+              <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-2.5 flex items-center gap-2 text-xs font-bold text-emerald-800">
                 <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
                 <span>Normal clinical trajectory • No acute flags</span>
               </div>
@@ -688,7 +809,7 @@ export const Step4Interview: React.FC = () => {
           </div>
 
           {/* Department Mode Selector in Sidebar */}
-          <div className="p-4 bg-[#F2F5F7] rounded-2xl border border-slate-200 space-y-2">
+          <div className="p-3.5 bg-[#F2F5F7] rounded-2xl border border-slate-200 space-y-2">
             <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
               Department Mode / विभाग
             </p>
@@ -696,7 +817,7 @@ export const Step4Interview: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setDepartment('general')}
-                className={`flex-1 py-2 text-xs font-bold rounded-lg cursor-pointer transition-all ${
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg cursor-pointer transition-all ${
                   department === 'general'
                     ? 'bg-[#102A43] text-white shadow-2xs'
                     : 'text-slate-500 hover:text-slate-900'
@@ -707,7 +828,7 @@ export const Step4Interview: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setDepartment('ayush')}
-                className={`flex-1 py-2 text-xs font-bold rounded-lg cursor-pointer transition-all ${
+                className={`flex-1 py-1.5 text-xs font-bold rounded-lg cursor-pointer transition-all ${
                   department === 'ayush'
                     ? 'bg-[#1B4332] text-white shadow-2xs'
                     : 'text-slate-500 hover:text-slate-900'
@@ -721,7 +842,7 @@ export const Step4Interview: React.FC = () => {
       </div>
 
       {/* Footer Navigation Bar (Matching Professional Polish Theme) */}
-      <footer className="w-full bg-white border border-slate-200 rounded-2xl px-6 sm:px-10 py-4 flex flex-wrap items-center justify-between gap-4 shadow-xs">
+      <footer className="w-full bg-white border border-slate-200 rounded-2xl px-6 sm:px-10 py-3.5 sm:py-4 flex flex-wrap items-center justify-between gap-4 shadow-xs">
         {/* Left: Back & Repeat Voice Actions */}
         <div className="flex items-center space-x-6 sm:space-x-8">
           <button
@@ -729,8 +850,8 @@ export const Step4Interview: React.FC = () => {
             onClick={handlePreviousQuestion}
             className="flex items-center space-x-3 group cursor-pointer text-left"
           >
-            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors">
-              <ArrowLeft className="w-6 h-6 text-[#102A43]" />
+            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors">
+              <ArrowLeft className="w-5 h-5 sm:w-6 sm:h-6 text-[#102A43]" />
             </div>
             <div>
               <p className="text-xs font-black uppercase text-slate-400">Back</p>
@@ -743,8 +864,8 @@ export const Step4Interview: React.FC = () => {
             onClick={handleRepeatVoice}
             className="flex items-center space-x-3 group cursor-pointer text-left"
           >
-            <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors">
-              <RotateCcw className="w-6 h-6 text-[#102A43]" />
+            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors">
+              <RotateCcw className="w-5 h-5 sm:w-6 sm:h-6 text-[#102A43]" />
             </div>
             <div>
               <p className="text-xs font-black uppercase text-slate-400">Repeat</p>
@@ -768,14 +889,10 @@ export const Step4Interview: React.FC = () => {
           <button
             id="btn-confirm-next-question"
             type="button"
-            disabled={
-              (!currentSelected && currentQuestion.input_type === 'single_select') ||
-              (currentQuestion.input_type === 'free_text' && !customFreeText.trim())
-            }
+            disabled={isNextDisabled}
             onClick={handleConfirmNext}
             className={`px-8 sm:px-10 py-3.5 sm:py-4 rounded-2xl font-black text-base sm:text-lg shadow-xl shadow-yellow-100/50 border-b-4 border-yellow-600 active:border-b-0 active:translate-y-1 transition-all cursor-pointer flex items-center gap-2 ${
-              (!currentSelected && currentQuestion.input_type === 'single_select') ||
-              (currentQuestion.input_type === 'free_text' && !customFreeText.trim())
+              isNextDisabled
                 ? 'bg-slate-200 text-slate-400 border-slate-300 shadow-none cursor-not-allowed'
                 : 'bg-[#F0B429] text-[#102A43] hover:brightness-105'
             }`}
@@ -793,3 +910,5 @@ export const Step4Interview: React.FC = () => {
     </div>
   );
 };
+
+export default Step4Interview;

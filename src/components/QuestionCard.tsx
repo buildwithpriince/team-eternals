@@ -22,6 +22,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
 }) => {
   const { language, theme, speakText, autoVoiceEnabled } = useApp();
   const [currentSelected, setCurrentSelected] = useState<string | undefined>(selectedOptionId);
+  const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
   const [customFreeText, setCustomFreeText] = useState<string>('');
   const [isMatchingVoice, setIsMatchingVoice] = useState<boolean>(false);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
@@ -32,6 +33,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   useEffect(() => {
     activeQuestionIdRef.current = question.id;
     setCurrentSelected(selectedOptionId);
+    setSelectedOptionIds([]);
     setCustomFreeText('');
     setVoiceStatus(null);
     setIsMatchingVoice(false);
@@ -46,7 +48,31 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   }, [question.id, language]);
 
   const handleSelectOption = (option: QuestionOption) => {
-    setCurrentSelected(option.id);
+    if (question.input_type === 'multi_select') {
+      const isNoneOption =
+        option.id.includes('none') ||
+        option.id.includes('no') ||
+        option.id === 'surg_no';
+
+      if (isNoneOption) {
+        setSelectedOptionIds((prev) =>
+          prev.includes(option.id) ? [] : [option.id]
+        );
+      } else {
+        setSelectedOptionIds((prev) => {
+          const withoutNone = prev.filter(
+            (id) => !id.includes('none') && !id.includes('no') && id !== 'surg_no'
+          );
+          if (withoutNone.includes(option.id)) {
+            return withoutNone.filter((id) => id !== option.id);
+          } else {
+            return [...withoutNone, option.id];
+          }
+        });
+      }
+    } else {
+      setCurrentSelected(option.id);
+    }
   };
 
   const handleVoiceInput = async (transcript: string) => {
@@ -65,19 +91,34 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
     const localSemantic = matchSemanticsLocally(transcript, question.options);
     let instant: QuestionOption | undefined;
     if (localSemantic.matchedIds && localSemantic.matchedIds.length > 0) {
-      instant = question.options.find((opt) => opt.id === localSemantic.matchedIds[0]);
+      if (question.input_type === 'multi_select') {
+        const matched = question.options.filter((opt) => localSemantic.matchedIds.includes(opt.id));
+        if (matched.length > 0) {
+          if (activeQuestionIdRef.current !== targetQId) return;
+          setSelectedOptionIds((prev) => {
+            const newIds = matched.map((o) => o.id);
+            return Array.from(new Set([...prev.filter((id) => !id.includes('none')), ...newIds]));
+          });
+          const names = matched.map((o) => (language === 'hi' ? o.text_hi : o.text_en)).join(', ');
+          setVoiceStatus(language === 'hi' ? `चयनित: ${names}` : `Matched: ${names}`);
+          speechService.playChime('success');
+        }
+      } else {
+        instant = question.options.find((opt) => opt.id === localSemantic.matchedIds[0]);
+        if (instant) {
+          if (activeQuestionIdRef.current !== targetQId) return;
+          handleSelectOption(instant);
+          setVoiceStatus(
+            language === 'hi'
+              ? `चयनित: ${instant.text_hi}`
+              : `Matched & Selected: ${instant.text_en}`
+          );
+          speechService.playChime('success');
+        }
+      }
     }
 
-    if (instant) {
-      if (activeQuestionIdRef.current !== targetQId) return;
-      handleSelectOption(instant);
-      setVoiceStatus(
-        language === 'hi'
-          ? `चयनित: ${instant.text_hi}`
-          : `Matched & Selected: ${instant.text_en}`
-      );
-      speechService.playChime('success');
-    } else {
+    if (!instant && question.input_type !== 'multi_select') {
       if (activeQuestionIdRef.current !== targetQId) return;
       setIsMatchingVoice(true);
       setVoiceStatus(language === 'hi' ? 'Gemini AI सटीक विकल्प खोज रहा है...' : 'Matching with Gemini Flash AI...');
@@ -99,13 +140,21 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       setIsMatchingVoice(false);
 
       if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
-        const matched = question.options.find((o) => matchResult.matchedIds.includes(o.id));
-        if (matched) {
-          handleSelectOption(matched);
+        const matched = question.options.filter((o) => matchResult.matchedIds.includes(o.id));
+        if (matched.length > 0) {
+          if (question.input_type === 'multi_select') {
+            setSelectedOptionIds((prev) => {
+              const newIds = matched.map((o) => o.id);
+              return Array.from(new Set([...prev.filter((id) => !id.includes('none')), ...newIds]));
+            });
+          } else {
+            handleSelectOption(matched[0]);
+          }
+          const names = matched.map((o) => (language === 'hi' ? o.text_hi : o.text_en)).join(', ');
           setVoiceStatus(
             language === 'hi'
-              ? `चयनित: ${matched.text_hi}`
-              : `Matched & Selected: ${matched.text_en}`
+              ? `चयनित: ${names}`
+              : `Matched & Selected: ${names}`
           );
           speechService.playChime('success');
           return;
@@ -138,16 +187,37 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       return;
     }
 
+    if (question.input_type === 'multi_select') {
+      const matched = question.options.filter((o) => selectedOptionIds.includes(o.id));
+      if (matched.length > 0) {
+        const combinedOpt: QuestionOption = {
+          id: matched.map((o) => o.id).join('_'),
+          text_en: matched.map((o) => o.text_en).join('; '),
+          text_hi: matched.map((o) => o.text_hi).join('; '),
+          red_flag: matched.some((o) => o.red_flag),
+          red_flag_reason: matched.find((o) => o.red_flag)?.red_flag_reason,
+        };
+        onAnswerSelected(combinedOpt);
+      }
+      return;
+    }
+
     const matched = question.options.find((o) => o.id === currentSelected);
     if (matched) {
       onAnswerSelected(matched);
     }
   };
 
+  const isNextDisabled =
+    (question.input_type === 'single_select' && !currentSelected) ||
+    (question.input_type === 'multi_select' && selectedOptionIds.length === 0) ||
+    (question.input_type === 'free_text' && !customFreeText.trim()) ||
+    isSubmitting;
+
   return (
     <div
       id={`question-card-${question.id}`}
-      className="w-full bg-white rounded-2xl p-5 sm:p-8 border-2 shadow-md space-y-6 animate-fadeIn"
+      className="w-full bg-white rounded-2xl p-5 sm:p-7 border-2 shadow-md space-y-5 animate-fadeIn"
       style={{ borderColor: theme.colors.borderDefault }}
     >
       {/* Top Banner: Voice prompt bar */}
@@ -178,6 +248,12 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
             {question.section.replace('_', ' ')}
           </span>
 
+          {question.input_type === 'multi_select' && (
+            <span className="px-2.5 py-0.5 rounded-md text-xs font-bold bg-blue-100 text-blue-800 border border-blue-200">
+              {language === 'hi' ? 'एक से अधिक चुनें' : 'Multi-Select'}
+            </span>
+          )}
+
           {question.symptom_tags.map((tag, idx) => (
             <span
               key={idx}
@@ -203,14 +279,22 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       </div>
 
       {/* Option Chips or Free Text Input */}
-      {question.input_type === 'single_select' ? (
-        <div className="space-y-3 pt-2">
+      {question.input_type !== 'free_text' ? (
+        <div
+          className="grid gap-3.5 w-full pt-2"
+          style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}
+        >
           {question.options.map((opt, idx) => (
             <OptionChip
               key={opt.id}
               option={opt}
               index={idx}
-              isSelected={currentSelected === opt.id}
+              isMultiSelect={question.input_type === 'multi_select'}
+              isSelected={
+                question.input_type === 'multi_select'
+                  ? selectedOptionIds.includes(opt.id)
+                  : currentSelected === opt.id
+              }
               onSelect={handleSelectOption}
             />
           ))}
@@ -230,7 +314,7 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
                 ? 'अपनी तकलीफ का विस्तार से वर्णन करें...'
                 : 'Describe your symptoms in your own words...'
             }
-            className="w-full p-4 rounded-xl border-2 border-slate-300 focus:border-cyan-700 focus:ring-4 focus:ring-cyan-100 text-lg font-medium text-slate-900"
+            className="w-full p-4 rounded-xl border-2 border-slate-300 focus:border-cyan-700 focus:ring-4 focus:ring-cyan-100 text-base sm:text-lg font-medium text-slate-900"
           />
         </div>
       )}
@@ -253,23 +337,15 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         <button
           id="btn-confirm-next-question"
           type="button"
-          disabled={
-            (!currentSelected && question.input_type === 'single_select') ||
-            (question.input_type === 'free_text' && !customFreeText.trim()) ||
-            isSubmitting
-          }
+          disabled={isNextDisabled}
           onClick={handleConfirmNext}
           className={`w-full sm:w-auto px-8 py-4 rounded-xl font-extrabold text-lg flex items-center justify-center gap-3 shadow-lg transition-all active:scale-95 cursor-pointer min-h-[56px] ${
-            (!currentSelected && question.input_type === 'single_select') ||
-            (question.input_type === 'free_text' && !customFreeText.trim())
+            isNextDisabled
               ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
               : 'text-white'
           }`}
           style={{
-            backgroundColor:
-              currentSelected || (question.input_type === 'free_text' && customFreeText.trim())
-                ? theme.colors.primary
-                : undefined,
+            backgroundColor: !isNextDisabled ? theme.colors.primary : undefined,
           }}
         >
           <span>

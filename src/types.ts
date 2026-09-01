@@ -26,7 +26,7 @@ export interface BackendQuestionContract {
   id: string;
   question_en: string;
   question_hi: string;
-  input_type: 'single_select' | 'free_text';
+  input_type: 'single_select' | 'multi_select' | 'free_text';
   options: QuestionOption[];
   section: SectionKey;
   symptom_tags: string[];

@@ -4,7 +4,7 @@ import { BackendQuestionContract, QuestionOption } from '../types';
 import { OptionChip } from './OptionChip';
 import { VoicePrompter } from './VoicePrompter';
 import { useApp } from '../context/AppContext';
-import { matchVoiceToOptions } from '../utils/aiMatcher';
+import { matchVoiceToOptions, matchSemanticsLocally } from '../utils/aiMatcher';
 import { speechService } from '../utils/speech';
 
 interface QuestionCardProps {
@@ -26,11 +26,15 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   const [isMatchingVoice, setIsMatchingVoice] = useState<boolean>(false);
   const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
 
-  // When question changes, speak question if autoVoice is on
+  const activeQuestionIdRef = useRef<string>(question.id);
+
+  // When question changes, speak question if autoVoice is on and clear previous state
   useEffect(() => {
+    activeQuestionIdRef.current = question.id;
     setCurrentSelected(selectedOptionId);
     setCustomFreeText('');
     setVoiceStatus(null);
+    setIsMatchingVoice(false);
 
     if (autoVoiceEnabled) {
       const audioPrompt =
@@ -46,17 +50,38 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   };
 
   const handleVoiceInput = async (transcript: string) => {
+    const targetQId = question.id;
     if (!transcript.trim()) return;
 
     if (question.input_type === 'free_text') {
+      if (activeQuestionIdRef.current !== targetQId) return;
       setCustomFreeText(transcript);
       setVoiceStatus(language === 'hi' ? `दर्ज हुआ: "${transcript}"` : `Transcribed: "${transcript}"`);
       speechService.playChime('success');
       return;
     }
 
-    setIsMatchingVoice(true);
-    setVoiceStatus(language === 'hi' ? 'Gemini AI उत्तर का मिलान कर रहा है...' : 'Matching with Gemini AI...');
+    // Instant semantic match first (e.g. "5 months" -> "> 1 to 3 months", severity, etc.)
+    const localSemantic = matchSemanticsLocally(transcript, question.options);
+    let instant: QuestionOption | undefined;
+    if (localSemantic.matchedIds && localSemantic.matchedIds.length > 0) {
+      instant = question.options.find((opt) => opt.id === localSemantic.matchedIds[0]);
+    }
+
+    if (instant) {
+      if (activeQuestionIdRef.current !== targetQId) return;
+      handleSelectOption(instant);
+      setVoiceStatus(
+        language === 'hi'
+          ? `चयनित: ${instant.text_hi}`
+          : `Matched & Selected: ${instant.text_en}`
+      );
+      speechService.playChime('success');
+    } else {
+      if (activeQuestionIdRef.current !== targetQId) return;
+      setIsMatchingVoice(true);
+      setVoiceStatus(language === 'hi' ? 'Gemini AI सटीक विकल्प खोज रहा है...' : 'Matching with Gemini Flash AI...');
+    }
 
     try {
       const matchResult = await matchVoiceToOptions(
@@ -70,12 +95,12 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         language
       );
 
+      if (activeQuestionIdRef.current !== targetQId) return;
       setIsMatchingVoice(false);
 
       if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
         const matched = question.options.find((o) => matchResult.matchedIds.includes(o.id));
         if (matched) {
-          // Programmatically trigger the exact same selection state update
           handleSelectOption(matched);
           setVoiceStatus(
             language === 'hi'
@@ -87,13 +112,17 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         }
       }
 
-      setVoiceStatus(
-        language === 'hi'
-          ? `कोई मिलान नहीं मिला ("${transcript}")। कृपया नीचे से चुनें।`
-          : `No match found ("${transcript}"). Please select below.`
-      );
+      if (!instant) {
+        setVoiceStatus(
+          language === 'hi'
+            ? `कोई मिलान नहीं मिला ("${transcript}")। कृपया नीचे से चुनें।`
+            : `No match found ("${transcript}"). Please select below.`
+        );
+      }
     } catch (err) {
-      setIsMatchingVoice(false);
+      if (activeQuestionIdRef.current === targetQId) {
+        setIsMatchingVoice(false);
+      }
       console.error('QuestionCard voice match error:', err);
     }
   };

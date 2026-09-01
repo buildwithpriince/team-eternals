@@ -15,7 +15,7 @@ import { OptionChip } from '../../components/OptionChip';
 import { generalClinicalQuestions, ayushClinicalQuestions } from '../../data/clinicalQuestions';
 import { BackendQuestionContract, QuestionOption, Department } from '../../types';
 import { speechService } from '../../utils/speech';
-import { matchVoiceToOptions } from '../../utils/aiMatcher';
+import { matchVoiceToOptions, matchSemanticsLocally } from '../../utils/aiMatcher';
 
 export const Step4Interview: React.FC = () => {
   const {
@@ -50,9 +50,32 @@ export const Step4Interview: React.FC = () => {
   } | null>(null);
 
   const recognitionRef = useRef<any>(null);
+  const activeQuestionIdRef = useRef<string>(currentQuestion.id);
 
-  // Find previously saved answer for this question if any
+  // Keep activeQuestionIdRef in sync with current question
   useEffect(() => {
+    activeQuestionIdRef.current = currentQuestion.id;
+  }, [currentQuestion.id]);
+
+  // Find previously saved answer for this question if any, and clean up previous question voice state
+  useEffect(() => {
+    // 1. Abort any running speech recognition from previous question immediately
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch {
+        // Ignore
+      }
+      recognitionRef.current = null;
+    }
+
+    // 2. Clear all voice state instantly so previous question text/feedback never bleeds into the next question
+    setVoiceTranscript('');
+    setVoiceFeedback(null);
+    setIsListening(false);
+    setIsMatchingVoice(false);
+
+    // 3. Populate existing answer if patient previously answered this question
     const prevAns = kioskPatient.historyAnswers?.[currentQuestion.id];
     if (prevAns) {
       const match = currentQuestion.options.find(
@@ -64,10 +87,6 @@ export const Step4Interview: React.FC = () => {
       setCurrentSelected(undefined);
       setCustomFreeText('');
     }
-
-    setVoiceTranscript('');
-    setVoiceFeedback(null);
-    setIsListening(false);
 
     if (autoVoiceEnabled) {
       const audioPrompt =
@@ -93,7 +112,7 @@ export const Step4Interview: React.FC = () => {
     setCurrentSelected(option.id);
   };
 
-  // Handle Speech-to-Text and Gemini 2.5 Flash Option Matching Flow
+  // Handle Speech-to-Text and Gemini AI Option Matching Flow
   const handleToggleVoiceAnswer = () => {
     if (isListening) {
       if (recognitionRef.current) {
@@ -127,14 +146,21 @@ export const Step4Interview: React.FC = () => {
         };
 
         recognition.onresult = async (event: any) => {
+          const targetQuestionId = currentQuestion.id;
           const rawTranscript = event.results?.[0]?.[0]?.transcript || '';
           if (!rawTranscript.trim()) return;
+
+          // Guard against question changes while speech recognition was processing
+          if (activeQuestionIdRef.current !== targetQuestionId) {
+            return;
+          }
 
           setVoiceTranscript(rawTranscript);
           setIsListening(false);
 
           // Handle free-text questions
           if (currentQuestion.input_type === 'free_text') {
+            if (activeQuestionIdRef.current !== targetQuestionId) return;
             setCustomFreeText(rawTranscript);
             setVoiceFeedback({
               text:
@@ -147,16 +173,40 @@ export const Step4Interview: React.FC = () => {
             return;
           }
 
-          // Process single_select options via Gemini 2.5 Flash
-          setIsMatchingVoice(true);
-          setVoiceFeedback({
-            text:
-              language === 'hi'
-                ? `Gemini AI उत्तर का मिलान कर रहा है... ("${rawTranscript}")`
-                : `Analyzing voice response with Gemini AI... ("${rawTranscript}")`,
-            type: 'info',
-          });
+          // Instant Semantic Local Match (0ms instant response for durations like "5 months", severity, symptoms, negations)
+          const localSemanticResult = matchSemanticsLocally(rawTranscript, currentQuestion.options);
+          let instantMatchedOption: QuestionOption | null = null;
 
+          if (localSemanticResult.matchedIds && localSemanticResult.matchedIds.length > 0) {
+            instantMatchedOption =
+              currentQuestion.options.find((opt) => opt.id === localSemanticResult.matchedIds[0]) ||
+              null;
+          }
+
+          if (instantMatchedOption) {
+            if (activeQuestionIdRef.current !== targetQuestionId) return;
+            handleSelectOption(instantMatchedOption);
+            setVoiceFeedback({
+              text:
+                language === 'hi'
+                  ? `चयनित: ${instantMatchedOption.text_hi}`
+                  : `Voice Selected: ${instantMatchedOption.text_en}`,
+              type: 'success',
+            });
+            speechService.playChime('success');
+          } else {
+            if (activeQuestionIdRef.current !== targetQuestionId) return;
+            setIsMatchingVoice(true);
+            setVoiceFeedback({
+              text:
+                language === 'hi'
+                  ? `Gemini AI सटीक उत्तर खोज रहा है... ("${rawTranscript}")`
+                  : `Matching precise option via Gemini AI... ("${rawTranscript}")`,
+              type: 'info',
+            });
+          }
+
+          // Rapid Gemini Flash (gemini-3.7-flash / gemini-3.6-flash for deep semantic inference)
           try {
             const matchResult = await matchVoiceToOptions(
               rawTranscript,
@@ -169,18 +219,21 @@ export const Step4Interview: React.FC = () => {
               language
             );
 
+            // Guard: If the patient navigated away to another question during the async API call, discard the result
+            if (activeQuestionIdRef.current !== targetQuestionId) {
+              return;
+            }
+
             setIsMatchingVoice(false);
 
             if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
-              // Find matching options in question
               const matchedOptions = currentQuestion.options.filter((opt) =>
                 matchResult.matchedIds.includes(opt.id)
               );
 
               if (matchedOptions.length > 0) {
                 // Programmatically trigger the same selection state update as tapping on the chip
-                const primaryMatch = matchedOptions[0];
-                handleSelectOption(primaryMatch);
+                handleSelectOption(matchedOptions[0]);
 
                 const optionNames = matchedOptions
                   .map((opt) => (language === 'hi' ? opt.text_hi : opt.text_en))
@@ -195,16 +248,16 @@ export const Step4Interview: React.FC = () => {
                 });
 
                 speechService.playChime('success');
-              } else {
+              } else if (!instantMatchedOption) {
                 setVoiceFeedback({
                   text:
                     language === 'hi'
-                      ? `स्पष्ट उत्तर नहीं मिला। कृपया नीचे दिए गए विकल्पों में से चुनें।`
-                      : `No exact option matched. Please tap the closest option below.`,
+                      ? `स्पष्ट उत्तर नहीं मिला। कृपया नीचे से विकल्प चुनें।`
+                      : `No exact option matched. Please tap an option below.`,
                   type: 'warning',
                 });
               }
-            } else {
+            } else if (!instantMatchedOption) {
               setVoiceFeedback({
                 text:
                   language === 'hi'
@@ -214,15 +267,10 @@ export const Step4Interview: React.FC = () => {
               });
             }
           } catch (err) {
-            setIsMatchingVoice(false);
+            if (activeQuestionIdRef.current === targetQuestionId) {
+              setIsMatchingVoice(false);
+            }
             console.error('Error during voice option matching:', err);
-            setVoiceFeedback({
-              text:
-                language === 'hi'
-                  ? `आवाज की पहचान हुई: "${rawTranscript}"`
-                  : `Voice recognized: "${rawTranscript}"`,
-              type: 'info',
-            });
           }
         };
 
@@ -243,8 +291,10 @@ export const Step4Interview: React.FC = () => {
       }
     } else {
       // Accessible simulation if browser does not support SpeechRecognition
+      const targetQuestionId = currentQuestion.id;
       setIsListening(true);
       setTimeout(async () => {
+        if (activeQuestionIdRef.current !== targetQuestionId) return;
         setIsListening(false);
         const sampleMatch = currentQuestion.options[0];
         if (sampleMatch) {
@@ -259,6 +309,7 @@ export const Step4Interview: React.FC = () => {
             currentQuestion.options,
             language
           );
+          if (activeQuestionIdRef.current !== targetQuestionId) return;
           setIsMatchingVoice(false);
 
           if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
@@ -291,6 +342,20 @@ export const Step4Interview: React.FC = () => {
   };
 
   const handleConfirmNext = () => {
+    // Abort running voice recognition and clear voice state when progressing
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch {
+        // Ignore
+      }
+      recognitionRef.current = null;
+    }
+    setVoiceFeedback(null);
+    setVoiceTranscript('');
+    setIsListening(false);
+    setIsMatchingVoice(false);
+
     let chosenOption: QuestionOption | undefined;
     let customText: string | undefined;
 
@@ -331,6 +396,19 @@ export const Step4Interview: React.FC = () => {
   };
 
   const handlePreviousQuestion = () => {
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.abort();
+      } catch {
+        // Ignore
+      }
+      recognitionRef.current = null;
+    }
+    setVoiceFeedback(null);
+    setVoiceTranscript('');
+    setIsListening(false);
+    setIsMatchingVoice(false);
+
     if (currentIndex > 0) {
       setCurrentIndex((prev) => prev - 1);
     } else {
@@ -412,10 +490,10 @@ export const Step4Interview: React.FC = () => {
                     : isMatchingVoice
                     ? language === 'hi'
                       ? 'Gemini AI मिलान कर रहा है...'
-                      : 'Gemini 2.5 Flash matching option...'
+                      : 'Gemini AI matching option...'
                     : language === 'hi'
-                    ? 'बोलकर उत्तर चुनें (Gemini 2.5 Flash संचालित)'
-                    : 'Speak your answer naturally (Gemini 2.5 Flash matched)'}
+                    ? 'बोलकर उत्तर चुनें (Gemini AI संचालित)'
+                    : 'Speak your answer naturally (Gemini AI matched)'}
                 </p>
               </div>
             </div>

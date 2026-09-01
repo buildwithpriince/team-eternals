@@ -1,8 +1,9 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import dotenv from 'dotenv';
+import { matchSemanticsLocally } from './src/utils/aiMatcher';
 
 dotenv.config();
 
@@ -25,6 +26,7 @@ function getAI(): GoogleGenAI | null {
 // In-memory cache for synthesized voice prompts to guarantee fast response
 const audioCache = new Map<string, { audioBase64: string; mimeType: string }>();
 let ttsRateLimitCooldownUntil = 0;
+let matcherRateLimitCooldownUntil = 0;
 
 async function startServer() {
   const app = express();
@@ -155,8 +157,9 @@ async function startServer() {
     }
   });
 
-  // Gemini Voice Option Matcher Endpoint (gemini-2.5-flash)
-  // Maps a patient's spoken transcript (Hindi/English/Hinglish) to matching question option IDs
+  // Ultra-Fast Gemini Voice Option Matcher Endpoint (gemini-3.7-flash / gemini-3.6-flash)
+  // Semantically maps spoken patient voice transcripts (Hindi/English/Hinglish) to the most precise option IDs,
+  // including duration ranges (e.g. "5 months" -> "> 1 to 3 months"), severity, synonyms, and colloquial terms.
   app.post('/api/match-voice-options', async (req, res) => {
     try {
       const { transcript, question, options = [], language = 'en' } = req.body;
@@ -174,123 +177,128 @@ async function startServer() {
       const cleanTranscript = transcript.trim();
       const ai = getAI();
 
-      // Options summary for the prompt
-      const optionsFormatted = options.map((opt: any) => ({
+      // Formatted options list with English and Hindi texts for semantic inference
+      const compactOptions = options.map((opt: any) => ({
         id: opt.id,
-        text_en: opt.text_en,
-        text_hi: opt.text_hi,
-        symptom_detail: opt.symptom_detail || '',
+        en: opt.text_en,
+        hi: opt.text_hi,
+        detail: opt.symptom_detail || undefined,
         red_flag: !!opt.red_flag,
       }));
 
-      const questionText = question
-        ? `Question: "${question.question_en || ''}" / "${question.question_hi || ''}"`
-        : '';
-
-      const prompt = `
-${questionText}
-Patient's Spoken Voice Transcript: "${cleanTranscript}"
-Spoken Language Context: ${language === 'hi' ? 'Hindi / Hinglish' : 'English / Hinglish'}
-
+      const prompt = `Patient Spoken Voice Input: "${cleanTranscript}"
+Question Context: "${question?.question_en || ''}" / "${question?.question_hi || ''}"
 Available Options:
-${JSON.stringify(optionsFormatted, null, 2)}
+${JSON.stringify(compactOptions, null, 2)}
 
-Instructions:
-1. Determine which option ID(s) from the "Available Options" list directly match what the patient said.
-2. If the patient described multiple symptoms or conditions (e.g. "I have diabetes and high BP"), return ALL corresponding option IDs in the "matchedIds" array.
-3. If the transcript clearly selects or answers with one option (even with casual slang, colloquial terms, Hindi words, or descriptive phrasing like "very severe on left side"), return that option's ID.
-4. If nothing in the transcript matches any available option, return ["none"] in matchedIds.
-`;
+TASK:
+Identify the single most precise and clinically accurate option ID(s) from "Available Options" that represents the patient's intent.
 
-      if (ai) {
-        try {
-          const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
+CRITICAL REASONING RULES:
+1. SEMANTIC & NEAREST-OPTION MATCHING:
+   - Match even when exact words differ. Interpret the underlying clinical meaning, severity, timeline, and intent.
+2. DURATION / TIME RANGE CONVERSIONS:
+   - Convert spoken numbers and units (days, weeks, months, years) to the matching range bucket:
+     * "5 months", "6 months", "1 year", "2 years", "since last year", "paanch mahine", "kaafi time se" -> Match the chronic / longest duration option (e.g. "More than 1 to 3 months / Long term").
+     * "2 weeks", "3 weeks", "20 days", "do hafte", "half a month" -> Match the 1 to 4 weeks option.
+     * "3 days", "4 days", "5 days", "char din", "past week", "pichle hafte" -> Match the 2 to 7 days option.
+     * "today", "since morning", "few hours", "aaj subah", "kal raat se" -> Match the < 24 hours / today option.
+3. SEVERITY & PAIN SCALES:
+   - "unbearable", "killing me", "bahut zyada", "cannot sleep/stand", "10/10", "extreme" -> Severe / Unbearable option.
+   - "mild", "thoda sa", "manageable", "tolerable", "1-3/10" -> Mild option.
+   - "moderate", "medium", "disturbing routine", "madhyam" -> Moderate option.
+   - "comes and goes", "waves", "kabhi kabhi", "beech beech me" -> Intermittent option.
+4. BILINGUAL & COLLOQUIAL MAPPING:
+   - Hindi/Hinglish phrases like "chakkar", "gas/jalan", "dam ghutna", "gathiya", "badan dard", "sugar/bp checkup", "bidi/tambaku", "sharab", "stent/heart attack" must be accurately routed to their corresponding option ID.
+5. NEGATIONS & AFFIRMATIONS:
+   - "nahi", "no", "never", "kuch nahi", "none", "bilkul nahi", "sab theek" -> Select the negative / "None" option.
+   - "haan", "yes", "bilkul", "true" -> Select the affirmative / "Yes" option.
+
+Return ONLY a JSON object:
+{"matchedIds": ["<valid_option_id>"], "explanation": "<short reason>", "confidence": 0.95}`;
+
+      if (ai && Date.now() >= matcherRateLimitCooldownUntil) {
+        // Supported models for fast bilingual semantic classification
+        const fastModels = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+
+        for (const modelName of fastModels) {
+          try {
+            const config: any = {
+              temperature: 0,
+              maxOutputTokens: 150,
               systemInstruction:
-                'You are an expert bilingual clinical AI triage assistant in an Indian hospital OPD. Your task is to match spoken patient transcripts (in Hindi, English, Hinglish, or regional dialects) to the exact option IDs from a predefined clinical questionnaire. Return only valid option IDs from the provided list, or ["none"] if nothing matches. When multiple symptoms are described, return all matching IDs.',
+                'You are a high-speed bilingual clinical triage matcher in an Indian hospital OPD. Convert natural spoken language (including numbers, durations like "5 months", pain scales, Hindi/Hinglish expressions, and negations) to the single most precise option ID from the given list. Output JSON with {"matchedIds": string[]}.',
               responseMimeType: 'application/json',
-            },
-          });
+            };
 
-          const rawText = response?.text?.trim() || '';
-          if (rawText) {
-            try {
-              const parsed = JSON.parse(rawText);
-              let matchedIds: string[] = [];
+            // Set thinkingLevel only for Gemini 3 series models
+            if (modelName.startsWith('gemini-3')) {
+              config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
+            }
 
-              if (Array.isArray(parsed.matchedIds)) {
-                matchedIds = parsed.matchedIds;
-              } else if (typeof parsed.matchedIds === 'string') {
-                matchedIds = [parsed.matchedIds];
-              } else if (Array.isArray(parsed.matched_ids)) {
-                matchedIds = parsed.matched_ids;
-              } else if (typeof parsed.id === 'string') {
-                matchedIds = [parsed.id];
+            const response = await ai.models.generateContent({
+              model: modelName,
+              contents: prompt,
+              config,
+            });
+
+            const rawText = response?.text?.trim() || '';
+            if (rawText) {
+              try {
+                const parsed = JSON.parse(rawText);
+                let matchedIds: string[] = [];
+
+                if (Array.isArray(parsed.matchedIds)) {
+                  matchedIds = parsed.matchedIds;
+                } else if (typeof parsed.matchedIds === 'string') {
+                  matchedIds = [parsed.matchedIds];
+                } else if (Array.isArray(parsed.matched_ids)) {
+                  matchedIds = parsed.matched_ids;
+                } else if (typeof parsed.id === 'string') {
+                  matchedIds = [parsed.id];
+                }
+
+                // Filter out "none" string if it's not a real option ID, or match valid IDs
+                const validOptionIds = new Set(options.map((o: any) => o.id));
+                const finalMatched = matchedIds.filter(
+                  (id) => id && (validOptionIds.has(id) || (id.toLowerCase() !== 'none' && validOptionIds.has(id)))
+                );
+
+                if (finalMatched.length > 0) {
+                  res.json({
+                    matchedIds: finalMatched,
+                    confidence: parsed.confidence || 0.98,
+                    explanation: parsed.explanation || `Matched via ${modelName}`,
+                    source: modelName,
+                  });
+                  return;
+                }
+              } catch {
+                // Parse error, fallback to next
               }
-
-              // Filter out "none" or invalid IDs that aren't in options
-              const validOptionIds = new Set(options.map((o: any) => o.id));
-              const finalMatched = matchedIds.filter(
-                (id) => id && id.toLowerCase() !== 'none' && validOptionIds.has(id)
-              );
-
-              res.json({
-                matchedIds: finalMatched,
-                confidence: parsed.confidence || 0.95,
-                explanation: parsed.explanation || 'Matched via Gemini 2.5 Flash',
-                source: 'gemini-2.5-flash',
-              });
-              return;
-            } catch {
-              // JSON parse error, proceed to fallback
+            }
+          } catch (genErr: any) {
+            const errMsg = genErr?.message || String(genErr);
+            if (errMsg.includes('503') || errMsg.includes('UNAVAILABLE') || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
+              // Upstream model spike or rate limit encountered; back off briefly and use instant local semantic engine
+              matcherRateLimitCooldownUntil = Date.now() + 30000;
+              break;
             }
           }
-        } catch (genErr) {
-          console.warn('Gemini option matching error, running fallback matcher:', genErr);
         }
       }
 
-      // High-accuracy heuristic & token matching fallback if Gemini is offline or rate-limited
-      const lower = cleanTranscript.toLowerCase();
-      const matchedIds: string[] = [];
-
-      for (const opt of options) {
-        const enLower = (opt.text_en || '').toLowerCase();
-        const hiLower = (opt.text_hi || '').toLowerCase();
-        const idLower = (opt.id || '').toLowerCase().replace(/_/g, ' ');
-
-        // Direct token or phrase inclusion
-        if (
-          lower.includes(enLower) ||
-          lower.includes(hiLower) ||
-          enLower.includes(lower) ||
-          lower.includes(idLower)
-        ) {
-          matchedIds.push(opt.id);
-          continue;
-        }
-
-        // Word-level matching
-        const words = lower.split(/\s+/).filter((w: string) => w.length > 3);
-        const matchCount = words.filter(
-          (w: string) => enLower.includes(w) || hiLower.includes(w) || idLower.includes(w)
-        ).length;
-
-        if (matchCount >= 2 || (words.length === 1 && matchCount === 1)) {
-          matchedIds.push(opt.id);
-        }
-      }
-
+      // High-accuracy semantic duration & clinical heuristic fallback
+      const fallbackResult = matchSemanticsLocally(cleanTranscript, options);
       res.json({
-        matchedIds: matchedIds.length > 0 ? matchedIds : [],
-        confidence: 0.8,
-        explanation: 'Matched via local heuristic engine',
-        source: 'local-heuristic',
+        matchedIds: fallbackResult.matchedIds,
+        confidence: fallbackResult.confidence,
+        explanation: fallbackResult.explanation,
+        source: 'local-semantic-heuristic',
       });
     } catch (err) {
-      res.status(500).json({ error: 'Internal server error in option matcher', matchedIds: [] });
+      console.error('Match voice options error:', err);
+      res.status(500).json({ error: 'Internal matching error', matchedIds: [] });
     }
   });
 

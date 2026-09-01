@@ -1,21 +1,27 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   ArrowLeft,
   RotateCcw,
-  Volume2,
   Sparkles,
   AlertTriangle,
   Mic,
   MicOff,
   Loader2,
   CheckCircle2,
+  Activity,
+  HeartPulse,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { OptionChip } from '../../components/OptionChip';
-import { generalClinicalQuestions, ayushClinicalQuestions } from '../../data/clinicalQuestions';
-import { BackendQuestionContract, QuestionOption, Department } from '../../types';
+import { BackendQuestionContract, QuestionOption, SectionKey } from '../../types';
 import { speechService } from '../../utils/speech';
 import { matchVoiceToOptions, matchSemanticsLocally } from '../../utils/aiMatcher';
+import {
+  fetchNextInterviewTurn,
+  StructuredAccumulatorState,
+  StructuredTurnRecord,
+} from '../../utils/interviewService';
+import { evaluateRedFlagRules } from '../../utils/redFlagRules';
 
 export const Step4Interview: React.FC = () => {
   const {
@@ -30,12 +36,64 @@ export const Step4Interview: React.FC = () => {
     autoVoiceEnabled,
   } = useApp();
 
-  // Pick question set based on active department
-  const questions: BackendQuestionContract[] =
-    department === 'ayush' ? ayushClinicalQuestions : generalClinicalQuestions;
+  // Dynamic Turn-by-Turn Interview State (Gemini-Powered History Engine)
+  const [currentTurnNumber, setCurrentTurnNumber] = useState<number>(1);
+  const [isLoadingTurn, setIsLoadingTurn] = useState<boolean>(false);
+  const [turnHistory, setTurnHistory] = useState<
+    Array<{
+      question: BackendQuestionContract;
+      answerEn: string;
+      answerHi: string;
+      selectedIds: string[];
+      symptomTags: string[];
+      isRedFlag: boolean;
+      redFlagReason?: string;
+    }>
+  >([]);
 
-  const [currentIndex, setCurrentIndex] = useState<number>(0);
-  const currentQuestion = questions[currentIndex] || questions[0];
+  // Running Structured Accumulator State passed into Gemini on every turn
+  const [structuredState, setStructuredState] = useState<StructuredAccumulatorState>(() => {
+    return {
+      chief_complaint: kioskPatient.chiefComplaints?.[0],
+      turns: [],
+      all_symptom_tags: [],
+      completed_sections: [],
+      current_section: 'chief_complaint',
+      patient_demographics: {
+        name: kioskPatient.name,
+        age: kioskPatient.age,
+        gender: kioskPatient.gender,
+      },
+    };
+  });
+
+  // Current active question dynamically elicited from Gemini
+  const [currentQuestion, setCurrentQuestion] = useState<BackendQuestionContract>({
+    id: 'turn_1_chief_complaint',
+    question_en: 'What is the main reason for your hospital visit today?',
+    question_hi: 'आज अस्पताल आने का आपका मुख्य कारण क्या है?',
+    input_type: 'single_select',
+    options: [
+      { id: 'fever', text_en: 'Fever & Body Shivers', text_hi: 'बुखार एवं शरीर में कंपकंपी' },
+      {
+        id: 'chest_pain',
+        text_en: 'Chest Pain or Heavy Pressure',
+        text_hi: 'सीने में दर्द या भारीपन',
+        red_flag: true,
+        red_flag_reason: 'Suspected Acute Coronary Syndrome / Angina (Immediate ECG & Cardiac Triage)',
+      },
+      { id: 'cough_breath', text_en: 'Cough or Difficulty Breathing', text_hi: 'खांसी या सांस लेने में तकलीफ' },
+      { id: 'stomach_pain', text_en: 'Stomach Ache, Gas or Vomiting', text_hi: 'पेट दर्द, गैस या उल्टी' },
+      { id: 'joint_pain', text_en: 'Joint Pain, Backache or Body Weakness', text_hi: 'जोड़ों का दर्द, कमर दर्द या कमजोरी' },
+      { id: 'other', text_en: 'Other symptom / Let me speak', text_hi: 'अन्य तकलीफ / बोलकर बताएं' },
+    ],
+    section: 'chief_complaint',
+    symptom_tags: ['primary_concern'],
+    section_complete: false,
+    interview_complete: false,
+    audio_prompt_en: 'Please select what troubles you the most today.',
+    audio_prompt_hi: 'कृपया बताएं कि आज आपको सबसे ज्यादा क्या तकलीफ है?',
+  });
 
   const [currentSelected, setCurrentSelected] = useState<string | undefined>(undefined);
   const [selectedOptionIds, setSelectedOptionIds] = useState<string[]>([]);
@@ -53,14 +111,59 @@ export const Step4Interview: React.FC = () => {
   const recognitionRef = useRef<any>(null);
   const activeQuestionIdRef = useRef<string>(currentQuestion.id);
 
-  // Keep activeQuestionIdRef in sync with current question
+  // Sync active question ref
   useEffect(() => {
     activeQuestionIdRef.current = currentQuestion.id;
   }, [currentQuestion.id]);
 
-  // Find previously saved answer for this question if any, and clean up previous question voice state
+  // Initial load of turn 1 from backend Gemini engine if starting fresh
+  const initialLoadRef = useRef(false);
   useEffect(() => {
-    // 1. Abort any running speech recognition from previous question immediately
+    if (!initialLoadRef.current) {
+      initialLoadRef.current = true;
+      setIsLoadingTurn(true);
+      const departmentTitle =
+        department === 'ayush'
+          ? 'AYUSH & Integrative Medicine OPD'
+          : 'General Internal Medicine OPD';
+
+      fetchNextInterviewTurn({
+        mode: department,
+        language,
+        department: departmentTitle,
+        structuredState,
+      })
+        .then((nextTurn) => {
+          const loadedQ: BackendQuestionContract = {
+            id: `turn_1_${nextTurn.section}`,
+            question_en: nextTurn.question_en,
+            question_hi: nextTurn.question_hi,
+            input_type: nextTurn.input_type,
+            options: nextTurn.options,
+            section: nextTurn.section,
+            symptom_tags: nextTurn.symptom_tags,
+            section_complete: nextTurn.section_complete,
+            interview_complete: nextTurn.interview_complete,
+            audio_prompt_en: nextTurn.audio_prompt_en || nextTurn.question_en,
+            audio_prompt_hi: nextTurn.audio_prompt_hi || nextTurn.question_hi,
+          };
+          setCurrentQuestion(loadedQ);
+          if (autoVoiceEnabled) {
+            const prompt = language === 'hi' ? loadedQ.audio_prompt_hi! : loadedQ.audio_prompt_en!;
+            speakText(prompt, language);
+          }
+        })
+        .catch((err) => {
+          console.warn('Initial turn fetch error:', err);
+        })
+        .finally(() => {
+          setIsLoadingTurn(false);
+        });
+    }
+  }, [department, language, autoVoiceEnabled, speakText, structuredState]);
+
+  // Clean voice state when question changes and auto-speak prompt
+  useEffect(() => {
     if (recognitionRef.current) {
       try {
         recognitionRef.current.abort();
@@ -69,90 +172,49 @@ export const Step4Interview: React.FC = () => {
       }
       recognitionRef.current = null;
     }
-
-    // 2. Clear all voice state instantly so previous question text/feedback never bleeds into the next question
     setVoiceTranscript('');
     setVoiceFeedback(null);
     setIsListening(false);
     setIsMatchingVoice(false);
 
-    // 3. Populate existing answer if patient previously answered this question
-    const prevAns = kioskPatient.historyAnswers?.[currentQuestion.id];
-    if (prevAns) {
-      if (currentQuestion.input_type === 'multi_select') {
-        const prevTextEn = prevAns.answer_en || '';
-        const prevTextHi = prevAns.answer_hi || '';
-        const matched = currentQuestion.options.filter(
-          (o) => prevTextEn.includes(o.text_en) || prevTextHi.includes(o.text_hi)
-        );
-        setSelectedOptionIds(matched.map((o) => o.id));
-        setCurrentSelected(undefined);
-        setCustomFreeText('');
-      } else if (currentQuestion.input_type === 'single_select') {
-        const match = currentQuestion.options.find(
-          (o) => o.text_en === prevAns.answer_en || o.text_hi === prevAns.answer_hi
-        );
-        if (match) setCurrentSelected(match.id);
-        setSelectedOptionIds([]);
-        setCustomFreeText('');
-      } else {
-        setCustomFreeText(prevAns.answer_en || '');
-        setCurrentSelected(undefined);
-        setSelectedOptionIds([]);
-      }
-    } else {
-      setCurrentSelected(undefined);
-      setSelectedOptionIds([]);
-      setCustomFreeText('');
-    }
-
-    if (autoVoiceEnabled) {
+    if (autoVoiceEnabled && currentQuestion.question_en) {
       const audioPrompt =
         language === 'hi'
           ? currentQuestion.audio_prompt_hi || currentQuestion.question_hi
           : currentQuestion.audio_prompt_en || currentQuestion.question_en;
       speakText(audioPrompt, language);
     }
+  }, [currentQuestion.id, language, autoVoiceEnabled, speakText]);
 
-    // Prefetch the upcoming question audio in background for instantaneous zero-delay response
-    if (currentIndex + 1 < questions.length) {
-      const nextQ = questions[currentIndex + 1];
-      const nextPrompt =
-        language === 'hi'
-          ? nextQ.audio_prompt_hi || nextQ.question_hi
-          : nextQ.audio_prompt_en || nextQ.question_en;
-      speechService.prefetch(nextPrompt, language);
-    }
-  }, [currentQuestion.id, currentIndex, language, questions, autoVoiceEnabled]);
+  // Option selection handler
+  const handleSelectOption = useCallback(
+    (option: QuestionOption) => {
+      if (currentQuestion.input_type === 'multi_select') {
+        const isNoneOption =
+          option.id.includes('none') ||
+          option.id.includes('no') ||
+          option.id === 'surg_no';
 
-  // Option selection handler for both single and multi-select
-  const handleSelectOption = (option: QuestionOption) => {
-    if (currentQuestion.input_type === 'multi_select') {
-      const isNoneOption =
-        option.id.includes('none') ||
-        option.id.includes('no') ||
-        option.id === 'surg_no';
-
-      if (isNoneOption) {
-        setSelectedOptionIds((prev) =>
-          prev.includes(option.id) ? [] : [option.id]
-        );
+        if (isNoneOption) {
+          setSelectedOptionIds((prev) => (prev.includes(option.id) ? [] : [option.id]));
+        } else {
+          setSelectedOptionIds((prev) => {
+            const withoutNone = prev.filter(
+              (id) => !id.includes('none') && !id.includes('no') && id !== 'surg_no'
+            );
+            if (withoutNone.includes(option.id)) {
+              return withoutNone.filter((id) => id !== option.id);
+            } else {
+              return [...withoutNone, option.id];
+            }
+          });
+        }
       } else {
-        setSelectedOptionIds((prev) => {
-          const withoutNone = prev.filter(
-            (id) => !id.includes('none') && !id.includes('no') && id !== 'surg_no'
-          );
-          if (withoutNone.includes(option.id)) {
-            return withoutNone.filter((id) => id !== option.id);
-          } else {
-            return [...withoutNone, option.id];
-          }
-        });
+        setCurrentSelected(option.id);
       }
-    } else {
-      setCurrentSelected(option.id);
-    }
-  };
+    },
+    [currentQuestion.input_type]
+  );
 
   // Handle Speech-to-Text and Gemini AI Option Matching Flow
   const handleToggleVoiceAnswer = () => {
@@ -171,7 +233,10 @@ export const Step4Interview: React.FC = () => {
     setVoiceFeedback(null);
     setVoiceTranscript('');
 
-    if (typeof window !== 'undefined' && ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+    if (
+      typeof window !== 'undefined' &&
+      ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)
+    ) {
       try {
         const win = window as unknown as Record<string, any>;
         const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
@@ -192,10 +257,7 @@ export const Step4Interview: React.FC = () => {
           const rawTranscript = event.results?.[0]?.[0]?.transcript || '';
           if (!rawTranscript.trim()) return;
 
-          // Guard against question changes while speech recognition was processing
-          if (activeQuestionIdRef.current !== targetQuestionId) {
-            return;
-          }
+          if (activeQuestionIdRef.current !== targetQuestionId) return;
 
           setVoiceTranscript(rawTranscript);
           setIsListening(false);
@@ -215,7 +277,7 @@ export const Step4Interview: React.FC = () => {
             return;
           }
 
-          // Instant Semantic Local Match (0ms instant response for durations like "5 months", severity, symptoms, negations)
+          // Instant Local Match
           const localSemanticResult = matchSemanticsLocally(rawTranscript, currentQuestion.options);
           let instantMatchedOption: QuestionOption | null = null;
 
@@ -261,17 +323,8 @@ export const Step4Interview: React.FC = () => {
             }
           }
 
-          if (!instantMatchedOption && currentQuestion.input_type !== 'multi_select') {
+          if (!instantMatchedOption) {
             if (activeQuestionIdRef.current !== targetQuestionId) return;
-            setIsMatchingVoice(true);
-            setVoiceFeedback({
-              text:
-                language === 'hi'
-                  ? `Gemini AI सटीक उत्तर खोज रहा है... ("${rawTranscript}")`
-                  : `Matching precise option via Gemini AI... ("${rawTranscript}")`,
-              type: 'info',
-            });
-          } else if (currentQuestion.input_type === 'multi_select') {
             setIsMatchingVoice(true);
             setVoiceFeedback({
               text:
@@ -282,7 +335,7 @@ export const Step4Interview: React.FC = () => {
             });
           }
 
-          // Rapid Gemini Flash (gemini-3.7-flash / gemini-3.6-flash for deep semantic inference)
+          // Rapid Gemini Matcher
           try {
             const matchResult = await matchVoiceToOptions(
               rawTranscript,
@@ -295,11 +348,7 @@ export const Step4Interview: React.FC = () => {
               language
             );
 
-            // Guard: If the patient navigated away to another question during the async API call, discard the result
-            if (activeQuestionIdRef.current !== targetQuestionId) {
-              return;
-            }
-
+            if (activeQuestionIdRef.current !== targetQuestionId) return;
             setIsMatchingVoice(false);
 
             if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
@@ -375,7 +424,7 @@ export const Step4Interview: React.FC = () => {
         setIsListening(false);
       }
     } else {
-      // Accessible simulation if browser does not support SpeechRecognition
+      // Fallback simulation if SpeechRecognition unsupported
       const targetQuestionId = currentQuestion.id;
       setIsListening(true);
       setTimeout(async () => {
@@ -383,8 +432,7 @@ export const Step4Interview: React.FC = () => {
         setIsListening(false);
         const sampleMatch = currentQuestion.options[0];
         if (sampleMatch) {
-          const simulatedText =
-            language === 'hi' ? sampleMatch.text_hi : sampleMatch.text_en;
+          const simulatedText = language === 'hi' ? sampleMatch.text_hi : sampleMatch.text_en;
           setVoiceTranscript(simulatedText);
           setIsMatchingVoice(true);
 
@@ -398,23 +446,18 @@ export const Step4Interview: React.FC = () => {
           setIsMatchingVoice(false);
 
           if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
-            const found = currentQuestion.options.find(
-              (o) => o.id === matchResult.matchedIds[0]
-            );
+            const found = currentQuestion.options.find((o) => o.id === matchResult.matchedIds[0]);
             if (found) {
               handleSelectOption(found);
               setVoiceFeedback({
-                text:
-                  language === 'hi'
-                    ? `चयनित: ${found.text_hi}`
-                    : `Selected: ${found.text_en}`,
+                text: language === 'hi' ? `चयनित: ${found.text_hi}` : `Selected: ${found.text_en}`,
                 type: 'success',
               });
               speechService.playChime('success');
             }
           }
         }
-      }, 2000);
+      }, 1500);
     }
   };
 
@@ -426,8 +469,10 @@ export const Step4Interview: React.FC = () => {
     speakText(audioPrompt, language);
   };
 
-  const handleConfirmNext = () => {
-    // Abort running voice recognition and clear voice state when progressing
+  // Submit current answer and advance to next Gemini conversational turn
+  const handleConfirmNext = async () => {
+    if (isLoadingTurn) return;
+
     if (recognitionRef.current) {
       try {
         recognitionRef.current.abort();
@@ -443,8 +488,8 @@ export const Step4Interview: React.FC = () => {
 
     let textEn = '';
     let textHi = '';
-    let hasRedFlag = false;
-    let redFlagReason: string | undefined = undefined;
+    let isOptionRedFlag = false;
+    let optionRedFlagReason: string | undefined = undefined;
 
     if (currentQuestion.input_type === 'free_text') {
       if (!customFreeText.trim()) return;
@@ -460,18 +505,30 @@ export const Step4Interview: React.FC = () => {
       textHi = chosenOptions.map((o) => o.text_hi).join('; ');
       const rfOption = chosenOptions.find((o) => o.red_flag);
       if (rfOption) {
-        hasRedFlag = true;
-        redFlagReason = rfOption.red_flag_reason;
+        isOptionRedFlag = true;
+        optionRedFlagReason = rfOption.red_flag_reason;
       }
     } else {
       const chosen = currentQuestion.options.find((o) => o.id === currentSelected);
       if (!chosen) return;
       textEn = chosen.text_en;
       textHi = chosen.text_hi;
-      hasRedFlag = !!chosen.red_flag;
-      redFlagReason = chosen.red_flag_reason;
+      isOptionRedFlag = !!chosen.red_flag;
+      optionRedFlagReason = chosen.red_flag_reason;
     }
 
+    // Run deterministic red-flag evaluation engine on returned symptom_tags + patient answer
+    const redFlagResult = evaluateRedFlagRules(
+      currentQuestion.symptom_tags,
+      `${textEn} ${textHi}`,
+      isOptionRedFlag,
+      optionRedFlagReason
+    );
+
+    const hasRedFlag = redFlagResult.isRedFlag;
+    const activeReason = redFlagResult.redFlagReasons[0] || optionRedFlagReason;
+
+    // Save answer into global context for real-time physician viewing
     saveKioskAnswer(
       currentQuestion.id,
       currentQuestion.question_en,
@@ -480,15 +537,111 @@ export const Step4Interview: React.FC = () => {
       textEn,
       textHi,
       hasRedFlag,
-      redFlagReason
+      activeReason
     );
 
-    // If next question exists
-    if (currentIndex < questions.length - 1) {
-      setCurrentIndex((prev) => prev + 1);
-    } else {
-      // Completed all questions -> move to document scan
+    // Record turn in structured history
+    const newTurnRecord: StructuredTurnRecord = {
+      turn_number: currentTurnNumber,
+      section: currentQuestion.section,
+      question_en: currentQuestion.question_en,
+      question_hi: currentQuestion.question_hi,
+      answer_en: textEn,
+      answer_hi: textHi,
+      symptom_tags: currentQuestion.symptom_tags,
+      is_red_flag: hasRedFlag,
+    };
+
+    const updatedTurnHistory = [
+      ...turnHistory,
+      {
+        question: currentQuestion,
+        answerEn: textEn,
+        answerHi: textHi,
+        selectedIds:
+          currentQuestion.input_type === 'multi_select'
+            ? selectedOptionIds
+            : currentSelected
+            ? [currentSelected]
+            : [],
+        symptomTags: currentQuestion.symptom_tags,
+        isRedFlag: hasRedFlag,
+        redFlagReason: activeReason,
+      },
+    ];
+    setTurnHistory(updatedTurnHistory);
+
+    // Update structured accumulator state
+    const allTags = Array.from(
+      new Set([...structuredState.all_symptom_tags, ...currentQuestion.symptom_tags])
+    );
+    const completedSecs = currentQuestion.section_complete
+      ? Array.from(new Set([...structuredState.completed_sections, currentQuestion.section]))
+      : structuredState.completed_sections;
+
+    const updatedState: StructuredAccumulatorState = {
+      ...structuredState,
+      chief_complaint:
+        currentQuestion.section === 'chief_complaint' && !structuredState.chief_complaint
+          ? textEn
+          : structuredState.chief_complaint,
+      turns: [...structuredState.turns, newTurnRecord],
+      all_symptom_tags: allTags,
+      completed_sections: completedSecs,
+      current_section: currentQuestion.section,
+    };
+    setStructuredState(updatedState);
+
+    // Check if interview is marked complete by Gemini engine or reached terminal depth
+    if (currentQuestion.interview_complete || currentTurnNumber >= 9) {
       setCurrentKioskStep(5);
+      return;
+    }
+
+    // Call live Conversational History Engine for the next adaptive turn
+    setIsLoadingTurn(true);
+    try {
+      const departmentTitle =
+        department === 'ayush'
+          ? 'AYUSH & Integrative Medicine OPD'
+          : 'General Internal Medicine OPD';
+
+      const nextTurnData = await fetchNextInterviewTurn({
+        mode: department,
+        language,
+        department: departmentTitle,
+        structuredState: updatedState,
+      });
+
+      if (nextTurnData.interview_complete) {
+        setCurrentKioskStep(5);
+        return;
+      }
+
+      const nextTurnNumber = currentTurnNumber + 1;
+      const nextQ: BackendQuestionContract = {
+        id: `turn_${nextTurnNumber}_${nextTurnData.section}`,
+        question_en: nextTurnData.question_en,
+        question_hi: nextTurnData.question_hi,
+        input_type: nextTurnData.input_type,
+        options: nextTurnData.options,
+        section: nextTurnData.section,
+        symptom_tags: nextTurnData.symptom_tags,
+        section_complete: nextTurnData.section_complete,
+        interview_complete: nextTurnData.interview_complete,
+        audio_prompt_en: nextTurnData.audio_prompt_en || nextTurnData.question_en,
+        audio_prompt_hi: nextTurnData.audio_prompt_hi || nextTurnData.question_hi,
+      };
+
+      setCurrentTurnNumber(nextTurnNumber);
+      setCurrentQuestion(nextQ);
+      setCurrentSelected(undefined);
+      setSelectedOptionIds([]);
+      setCustomFreeText('');
+    } catch (err) {
+      console.error('Failed to load next interview turn:', err);
+    } finally {
+      setIsLoadingTurn(false);
     }
   };
 
@@ -506,8 +659,32 @@ export const Step4Interview: React.FC = () => {
     setIsListening(false);
     setIsMatchingVoice(false);
 
-    if (currentIndex > 0) {
-      setCurrentIndex((prev) => prev - 1);
+    if (turnHistory.length > 0) {
+      const prevTurn = turnHistory[turnHistory.length - 1];
+      const newHistory = turnHistory.slice(0, -1);
+      setTurnHistory(newHistory);
+      setCurrentTurnNumber((prev) => Math.max(1, prev - 1));
+      setCurrentQuestion(prevTurn.question);
+
+      if (prevTurn.question.input_type === 'multi_select') {
+        setSelectedOptionIds(prevTurn.selectedIds);
+        setCurrentSelected(undefined);
+        setCustomFreeText('');
+      } else if (prevTurn.question.input_type === 'single_select') {
+        setCurrentSelected(prevTurn.selectedIds[0]);
+        setSelectedOptionIds([]);
+        setCustomFreeText('');
+      } else {
+        setCustomFreeText(prevTurn.answerEn);
+        setCurrentSelected(undefined);
+        setSelectedOptionIds([]);
+      }
+
+      // Roll back structured state
+      setStructuredState((prev) => ({
+        ...prev,
+        turns: prev.turns.slice(0, -1),
+      }));
     } else {
       setCurrentKioskStep(3);
     }
@@ -521,12 +698,14 @@ export const Step4Interview: React.FC = () => {
 
   const activeRedFlagReason =
     (currentQuestion.input_type === 'multi_select'
-      ? currentQuestion.options.find((o) => selectedOptionIds.includes(o.id) && o.red_flag)?.red_flag_reason
+      ? currentQuestion.options.find((o) => selectedOptionIds.includes(o.id) && o.red_flag)
+          ?.red_flag_reason
       : currentQuestion.options.find((o) => o.id === currentSelected)?.red_flag_reason) ||
     kioskPatient.redFlags?.[0] ||
     'Patient reports urgent acute discomfort requiring fast-track triage.';
 
   const isNextDisabled =
+    isLoadingTurn ||
     (currentQuestion.input_type === 'single_select' && !currentSelected) ||
     (currentQuestion.input_type === 'multi_select' && selectedOptionIds.length === 0) ||
     (currentQuestion.input_type === 'free_text' && !customFreeText.trim());
@@ -543,28 +722,48 @@ export const Step4Interview: React.FC = () => {
           {/* Section Indicator & Dual Headings */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-widest text-[#102A43]/70">
-                Section: {currentQuestion.section.replace(/_/g, ' ')} |{' '}
-                {language === 'hi' ? 'नैदानिक पूछताछ' : 'Clinical Interview'}
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-[#102A43]/10 text-[#102A43] text-xs font-black uppercase tracking-wider rounded-lg border border-[#102A43]/15">
+                  <Activity className="w-3.5 h-3.5 text-[#102A43]" />
+                  Section: {currentQuestion.section.replace(/_/g, ' ')}
+                </span>
+                <span className="text-xs font-semibold text-slate-500 hidden sm:inline">
+                  {language === 'hi' ? 'लाइव नैदानिक पूछताछ' : 'Live Clinical Intake'}
+                </span>
+              </div>
+
               <div className="flex items-center gap-2">
                 {currentQuestion.input_type === 'multi_select' && (
                   <span className="text-[11px] font-extrabold px-2.5 py-0.5 bg-blue-100 text-blue-800 rounded-md border border-blue-200">
                     {language === 'hi' ? 'एक से अधिक चुनें' : 'Multi-Select'}
                   </span>
                 )}
-                <span className="text-xs font-extrabold px-2.5 py-1 bg-slate-200 text-slate-700 rounded-md">
-                  {currentIndex + 1} / {questions.length}
+                <span className="text-xs font-extrabold px-3 py-1 bg-slate-200 text-slate-700 rounded-md">
+                  Turn {currentTurnNumber}
                 </span>
               </div>
             </div>
 
-            <h2 className="text-2xl sm:text-3xl lg:text-3.5xl font-extrabold leading-tight text-[#102A43]">
-              {language === 'hi' ? currentQuestion.question_hi : currentQuestion.question_en}
-            </h2>
-            <h3 className="text-xl sm:text-2xl font-bold text-slate-600 leading-snug">
-              {language === 'hi' ? currentQuestion.question_en : currentQuestion.question_hi}
-            </h3>
+            {/* Dynamic Question Title */}
+            {isLoadingTurn ? (
+              <div className="py-8 flex items-center justify-center gap-3 bg-white/80 rounded-2xl border border-slate-200 shadow-2xs">
+                <Loader2 className="w-6 h-6 text-[#102A43] animate-spin" />
+                <p className="text-base font-bold text-slate-700">
+                  {language === 'hi'
+                    ? 'Gemini AI अगला क्लिनिकल प्रश्न तैयार कर रहा है...'
+                    : 'Gemini AI formulating next clinical question...'}
+                </p>
+              </div>
+            ) : (
+              <>
+                <h2 className="text-2xl sm:text-3xl lg:text-3.5xl font-extrabold leading-tight text-[#102A43]">
+                  {language === 'hi' ? currentQuestion.question_hi : currentQuestion.question_en}
+                </h2>
+                <h3 className="text-xl sm:text-2xl font-bold text-slate-600 leading-snug">
+                  {language === 'hi' ? currentQuestion.question_en : currentQuestion.question_hi}
+                </h3>
+              </>
+            )}
           </div>
 
           {/* Voice Input "Speak Answer" Action Bar */}
@@ -670,14 +869,14 @@ export const Step4Interview: React.FC = () => {
           )}
 
           {/* Options Grid: repeat(auto-fit, minmax(220px, 1fr)) */}
-          {currentQuestion.input_type !== 'free_text' ? (
+          {!isLoadingTurn && currentQuestion.input_type !== 'free_text' ? (
             <div
               className="grid gap-3.5 sm:gap-4 w-full"
               style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}
             >
               {currentQuestion.options.map((opt, idx) => (
                 <OptionChip
-                  key={opt.id}
+                  key={opt.id || `opt_${idx}`}
                   option={opt}
                   index={idx}
                   isMultiSelect={currentQuestion.input_type === 'multi_select'}
@@ -690,7 +889,7 @@ export const Step4Interview: React.FC = () => {
                 />
               ))}
             </div>
-          ) : (
+          ) : !isLoadingTurn ? (
             <div className="space-y-3 bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs">
               <label className="block text-base font-bold text-slate-800">
                 {language === 'hi'
@@ -710,20 +909,7 @@ export const Step4Interview: React.FC = () => {
                 className="w-full p-4 rounded-xl border-2 border-slate-300 focus:border-[#102A43] focus:ring-4 focus:ring-slate-100 text-base sm:text-lg font-medium text-slate-900"
               />
             </div>
-          )}
-
-          {/* Clinical Rationale Hint */}
-          {currentQuestion.clinical_rationale && (
-            <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-start gap-2.5 text-xs text-slate-600 shadow-2xs">
-              <Sparkles className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <span className="font-bold text-slate-900">
-                  {language === 'hi' ? 'क्लिनिकल तर्क: ' : 'Clinical Rationale: '}
-                </span>
-                {currentQuestion.clinical_rationale}
-              </div>
-            </div>
-          )}
+          ) : null}
         </section>
 
         {/* Aside / Doctor's Real-Time Summary Sidebar (Relative ~28-30% Width) */}
@@ -766,10 +952,12 @@ export const Step4Interview: React.FC = () => {
                 <div className="w-1.5 h-10 bg-emerald-500 rounded-full mt-1 shrink-0" />
                 <div>
                   <p className="text-[10px] font-bold text-slate-400 uppercase">
-                    Current Chief Concern
+                    Primary Chief Concern
                   </p>
                   <p className="text-sm font-bold text-slate-900 leading-tight">
-                    {kioskPatient.chiefComplaints?.[0] || 'Chest Pain / Acute Discomfort'}
+                    {structuredState.chief_complaint ||
+                      kioskPatient.chiefComplaints?.[0] ||
+                      'Clinical Intake in progress...'}
                   </p>
                 </div>
               </div>
@@ -777,31 +965,33 @@ export const Step4Interview: React.FC = () => {
               <div className="flex items-start space-x-3">
                 <div className="w-1.5 h-10 bg-[#102A43] rounded-full mt-1 shrink-0" />
                 <div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase">
-                    Active Section
-                  </p>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase">Active Section</p>
                   <p className="text-sm font-semibold text-slate-800">
                     {currentQuestion.section.replace(/_/g, ' ')}
                   </p>
                 </div>
               </div>
 
-              {/* Symptom Tags */}
+              {/* Symptom Tags Accumulated from Gemini turns */}
               <div className="flex items-start space-x-3 pt-1">
                 <div className="w-1.5 h-10 bg-slate-300 rounded-full mt-1 shrink-0" />
-                <div>
+                <div className="w-full">
                   <p className="text-[10px] font-bold text-slate-400 uppercase">
-                    Symptom Tags
+                    Extracted Symptom Tags ({structuredState.all_symptom_tags.length})
                   </p>
-                  <div className="flex flex-wrap gap-1.5 mt-1">
-                    {currentQuestion.symptom_tags.map((tag, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-slate-700"
-                      >
-                        #{tag}
-                      </span>
-                    ))}
+                  <div className="flex flex-wrap gap-1.5 mt-1 max-h-24 overflow-y-auto">
+                    {structuredState.all_symptom_tags.length > 0 ? (
+                      structuredState.all_symptom_tags.map((tag, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] font-bold text-slate-700"
+                        >
+                          #{tag}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-xs text-slate-400 italic">No tags extracted yet</span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -841,7 +1031,7 @@ export const Step4Interview: React.FC = () => {
         </aside>
       </div>
 
-      {/* Footer Navigation Bar (Matching Professional Polish Theme) */}
+      {/* Footer Navigation Bar */}
       <footer className="w-full bg-white border border-slate-200 rounded-2xl px-6 sm:px-10 py-3.5 sm:py-4 flex flex-wrap items-center justify-between gap-4 shadow-xs">
         {/* Left: Back & Repeat Voice Actions */}
         <div className="flex items-center space-x-6 sm:space-x-8">
@@ -878,11 +1068,31 @@ export const Step4Interview: React.FC = () => {
         <div className="flex items-center space-x-6">
           {/* Animated Audio Equalizer Bars */}
           <div className="flex space-x-1 items-center" title="Voice audio channel active">
-            <div className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${isSpeaking ? 'h-5 animate-pulse' : 'h-3'}`} />
-            <div className={`w-1 bg-blue-500 rounded-full transition-all duration-200 ${isSpeaking ? 'h-8 animate-pulse' : 'h-6'}`} />
-            <div className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${isSpeaking ? 'h-6 animate-pulse' : 'h-4'}`} />
-            <div className={`w-1 bg-blue-600 rounded-full transition-all duration-200 ${isSpeaking ? 'h-10 animate-pulse' : 'h-7'}`} />
-            <div className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${isSpeaking ? 'h-5 animate-pulse' : 'h-3'}`} />
+            <div
+              className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
+                isSpeaking ? 'h-5 animate-pulse' : 'h-3'
+              }`}
+            />
+            <div
+              className={`w-1 bg-blue-500 rounded-full transition-all duration-200 ${
+                isSpeaking ? 'h-8 animate-pulse' : 'h-6'
+              }`}
+            />
+            <div
+              className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
+                isSpeaking ? 'h-6 animate-pulse' : 'h-4'
+              }`}
+            />
+            <div
+              className={`w-1 bg-blue-600 rounded-full transition-all duration-200 ${
+                isSpeaking ? 'h-10 animate-pulse' : 'h-7'
+              }`}
+            />
+            <div
+              className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
+                isSpeaking ? 'h-5 animate-pulse' : 'h-3'
+              }`}
+            />
           </div>
 
           {/* Next Button CTA (Warm Amber with yellow border-b-4) */}
@@ -897,13 +1107,22 @@ export const Step4Interview: React.FC = () => {
                 : 'bg-[#F0B429] text-[#102A43] hover:brightness-105'
             }`}
           >
-            <span>
-              {currentIndex === questions.length - 1
-                ? language === 'hi'
-                  ? 'पूर्ण करें | FINISH'
-                  : 'NEXT | अगला'
-                : 'NEXT | अगला'}
-            </span>
+            {isLoadingTurn ? (
+              <>
+                <Loader2 className="w-5 h-5 animate-spin" />
+                <span>{language === 'hi' ? 'लोड हो रहा है...' : 'PROCESSING...'}</span>
+              </>
+            ) : (
+              <span>
+                {currentQuestion.interview_complete || currentTurnNumber >= 8
+                  ? language === 'hi'
+                    ? 'पूर्ण करें | FINISH'
+                    : 'FINISH | पूर्ण करें'
+                  : language === 'hi'
+                  ? 'NEXT | अगला'
+                  : 'NEXT | अगला'}
+              </span>
+            )}
           </button>
         </div>
       </footer>

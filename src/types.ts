@@ -66,6 +66,26 @@ export interface PatientHistoryAnswer {
   is_red_flag?: boolean;
 }
 
+export interface DoctorSummaryData {
+  chiefComplaint: string;
+  hpi: string;
+  pastMedicalSurgicalHistory: string;
+  drugAndAllergyHistory: string;
+  familyHistory: string;
+  personalHistory: string;
+  reviewOfSystems: string;
+  priorityClinicalWarningFlags: string[];
+  ayushAssessment?: {
+    prakriti?: string;
+    agni?: string;
+    kostha?: string;
+    bala?: string;
+    clinicalNotes?: string;
+  };
+  generatedAt?: string;
+  modelUsed?: string;
+}
+
 export interface PatientRecord {
   id: string;
   tokenNumber: string;
@@ -99,6 +119,7 @@ export interface PatientRecord {
     kostha?: string;
     bala?: string;
   };
+  doctorSummary?: DoctorSummaryData;
   physicianNotes?: string;
   doctorApproved?: boolean;
 }

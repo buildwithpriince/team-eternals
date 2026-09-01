@@ -8,10 +8,15 @@ import {
   RedFlagAlert,
   DoctorUser,
   SectionKey,
+  DoctorSummaryData,
 } from '../types';
 import { initialMockPatients, initialRedFlagAlerts, mockDoctors } from '../data/mockData';
 import { speechService } from '../utils/speech';
 import { themes, ThemeTokens } from '../themes/tokens';
+import {
+  buildDeterministicDoctorSummary,
+  generateDoctorSummaryFromGemini,
+} from '../utils/summaryService';
 
 export type AppView = 'kiosk' | 'doctor';
 
@@ -46,6 +51,8 @@ interface AppContextType {
   removeScannedDocument: (docId: string) => void;
   resetKioskFlow: () => void;
   completeKioskFlow: () => PatientRecord;
+  isGeneratingSummary: boolean;
+  regenerateDoctorSummary: (patientId: string) => Promise<DoctorSummaryData | null>;
 
   // Emergency Modal
   isEmergencyModalOpen: boolean;
@@ -82,6 +89,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [isEmergencyModalOpen, setIsEmergencyModalOpen] = useState<boolean>(false);
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const [autoVoiceEnabled, setAutoVoiceEnabled] = useState<boolean>(true);
+  const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
 
   // Doctors & Patient Database
   const [loggedInDoctor, setLoggedInDoctor] = useState<DoctorUser | null>(mockDoctors[0]);
@@ -229,6 +237,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const completeKioskFlow = (): PatientRecord => {
+    const initialSummary = buildDeterministicDoctorSummary(kioskPatient);
+
     const finalRecord: PatientRecord = {
       id: kioskPatient.id || `pat_${Date.now()}`,
       tokenNumber: kioskPatient.tokenNumber || 'OPD-300',
@@ -257,10 +267,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         temp: '98.6 °F',
         spo2: '98%',
       },
+      doctorSummary: initialSummary,
     };
 
     setPatients((prev) => [finalRecord, ...prev]);
+
+    // Asynchronously call Gemini (gemini-2.5-flash) to generate high-fidelity physician summary
+    setIsGeneratingSummary(true);
+    generateDoctorSummaryFromGemini(finalRecord)
+      .then((aiSummary) => {
+        if (aiSummary) {
+          updatePatientRecord(finalRecord.id, { doctorSummary: aiSummary });
+        }
+      })
+      .catch((err) => {
+        console.warn('Gemini summary background generation notice:', err);
+      })
+      .finally(() => {
+        setIsGeneratingSummary(false);
+      });
+
     return finalRecord;
+  };
+
+  const regenerateDoctorSummary = async (patientId: string): Promise<DoctorSummaryData | null> => {
+    const targetPatient = patients.find((p) => p.id === patientId) || activeDoctorPatient;
+    if (!targetPatient) return null;
+
+    setIsGeneratingSummary(true);
+    try {
+      const summary = await generateDoctorSummaryFromGemini(targetPatient);
+      updatePatientRecord(patientId, { doctorSummary: summary });
+      return summary;
+    } catch (e) {
+      console.error('Failed to regenerate doctor summary:', e);
+      return null;
+    } finally {
+      setIsGeneratingSummary(false);
+    }
   };
 
   const triggerEmergencyHelp = (type: string = 'general') => {
@@ -338,6 +382,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeScannedDocument,
         resetKioskFlow,
         completeKioskFlow,
+        isGeneratingSummary,
+        regenerateDoctorSummary,
         isEmergencyModalOpen,
         setIsEmergencyModalOpen,
         triggerEmergencyHelp,

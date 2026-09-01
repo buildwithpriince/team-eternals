@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Stethoscope,
   AlertTriangle,
@@ -13,12 +13,14 @@ import {
   Activity,
   Heart,
   UserCheck,
-  Plus,
+  RotateCw,
+  Info,
   ShieldCheck,
 } from 'lucide-react';
-import { PatientRecord, ScannedDocument } from '../../types';
+import { PatientRecord, DoctorSummaryData } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { DocumentExtractedCard } from '../../components/DocumentExtractedCard';
+import { buildDeterministicDoctorSummary } from '../../utils/summaryService';
 
 interface DoctorSummaryDetailProps {
   patient: PatientRecord;
@@ -29,50 +31,102 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
   patient,
   onBackToQueue,
 }) => {
-  const { updatePatientRecord, loggedInDoctor } = useApp();
+  const { updatePatientRecord, loggedInDoctor, isGeneratingSummary, regenerateDoctorSummary } = useApp();
 
-  // Local editable fields state for the structured history sections
+  // Initialize summary data from patient record or build deterministic fallback
+  const initialSummary: DoctorSummaryData =
+    patient.doctorSummary || buildDeterministicDoctorSummary(patient);
+
+  // Local editable fields state for the structured SOAP history sections
   const [isEditing, setIsEditing] = useState<boolean>(false);
-  const [chiefComplaint, setChiefComplaint] = useState<string>(
-    patient.chiefComplaints?.join(', ') || ''
+  const [chiefComplaint, setChiefComplaint] = useState<string>(initialSummary.chiefComplaint);
+  const [hpiText, setHpiText] = useState<string>(initialSummary.hpi);
+  const [pastHistoryText, setPastHistoryText] = useState<string>(initialSummary.pastMedicalSurgicalHistory);
+  const [drugAllergyText, setDrugAllergyText] = useState<string>(initialSummary.drugAndAllergyHistory);
+  const [familyHistoryText, setFamilyHistoryText] = useState<string>(initialSummary.familyHistory);
+  const [personalHistoryText, setPersonalHistoryText] = useState<string>(initialSummary.personalHistory);
+  const [rosText, setRosText] = useState<string>(initialSummary.reviewOfSystems);
+  const [warningFlags, setWarningFlags] = useState<string[]>(
+    initialSummary.priorityClinicalWarningFlags || patient.redFlags || []
   );
-  const [hpiText, setHpiText] = useState<string>(
-    patient.historyAnswers?.['hpi']?.answer_en ||
-    patient.historyAnswers?.['q3_severity_and_nature']?.answer_en ||
-    'Severe acute discomfort'
-  );
-  const [pastHistoryText, setPastHistoryText] = useState<string>(
-    patient.historyAnswers?.['past_history']?.answer_en ||
-    patient.historyAnswers?.['q5_past_history']?.answer_en ||
-    'No known chronic medical illness'
-  );
-  const [drugAllergyText, setDrugAllergyText] = useState<string>(
-    patient.historyAnswers?.['drug_allergy']?.answer_en ||
-    patient.historyAnswers?.['q7_drug_allergies']?.answer_en ||
-    'No Known Drug Allergies (NKDA)'
-  );
-  const [personalFamilyText, setPersonalFamilyText] = useState<string>(
-    patient.historyAnswers?.['personal_history']?.answer_en ||
-    patient.historyAnswers?.['q8_habits_and_family']?.answer_en ||
-    'Non-smoker, non-alcoholic. No early cardiac family history.'
-  );
-  const [rosText, setRosText] = useState<string>(
-    patient.historyAnswers?.['ros']?.answer_en ||
-    patient.historyAnswers?.['q9_ros_associated_symptoms']?.answer_en ||
-    'Systemic review negative for fever, weight loss, or pedal edema.'
+  const [ayushNotes, setAyushNotes] = useState<string>(
+    initialSummary.ayushAssessment?.clinicalNotes || ''
   );
   const [physicianNotes, setPhysicianNotes] = useState<string>(
     patient.physicianNotes || ''
   );
   const [savedSuccess, setSavedSuccess] = useState<boolean>(patient.doctorApproved || false);
   const [isRxModalOpen, setIsRxModalOpen] = useState<boolean>(false);
+  const [modelUsed, setModelUsed] = useState<string>(initialSummary.modelUsed || 'gemini-2.5-flash');
+
+  // Keep state synchronized if patient prop or summary updates
+  useEffect(() => {
+    const summary = patient.doctorSummary || buildDeterministicDoctorSummary(patient);
+    setChiefComplaint(summary.chiefComplaint);
+    setHpiText(summary.hpi);
+    setPastHistoryText(summary.pastMedicalSurgicalHistory);
+    setDrugAllergyText(summary.drugAndAllergyHistory);
+    setFamilyHistoryText(summary.familyHistory);
+    setPersonalHistoryText(summary.personalHistory);
+    setRosText(summary.reviewOfSystems);
+    setWarningFlags(summary.priorityClinicalWarningFlags || patient.redFlags || []);
+    if (summary.ayushAssessment?.clinicalNotes) {
+      setAyushNotes(summary.ayushAssessment.clinicalNotes);
+    }
+    if (summary.modelUsed) {
+      setModelUsed(summary.modelUsed);
+    }
+  }, [patient.doctorSummary, patient.id]);
 
   const isAyush = patient.department === 'ayush';
-  const hasRedFlags = patient.redFlags && patient.redFlags.length > 0;
+  const hasRedFlags = warningFlags.length > 0;
+
+  const handleRegenerate = async () => {
+    const freshSummary = await regenerateDoctorSummary(patient.id);
+    if (freshSummary) {
+      setChiefComplaint(freshSummary.chiefComplaint);
+      setHpiText(freshSummary.hpi);
+      setPastHistoryText(freshSummary.pastMedicalSurgicalHistory);
+      setDrugAllergyText(freshSummary.drugAndAllergyHistory);
+      setFamilyHistoryText(freshSummary.familyHistory);
+      setPersonalHistoryText(freshSummary.personalHistory);
+      setRosText(freshSummary.reviewOfSystems);
+      setWarningFlags(freshSummary.priorityClinicalWarningFlags || []);
+      if (freshSummary.ayushAssessment?.clinicalNotes) {
+        setAyushNotes(freshSummary.ayushAssessment.clinicalNotes);
+      }
+      if (freshSummary.modelUsed) {
+        setModelUsed(freshSummary.modelUsed);
+      }
+    }
+  };
 
   const handleSaveEMR = () => {
+    const updatedSummary: DoctorSummaryData = {
+      chiefComplaint,
+      hpi: hpiText,
+      pastMedicalSurgicalHistory: pastHistoryText,
+      drugAndAllergyHistory: drugAllergyText,
+      familyHistory: familyHistoryText,
+      personalHistory: personalHistoryText,
+      reviewOfSystems: rosText,
+      priorityClinicalWarningFlags: warningFlags,
+      ayushAssessment: isAyush
+        ? {
+            prakriti: patient.ayushAssessment?.prakriti || 'Vata-Kapha Pradhana',
+            agni: patient.ayushAssessment?.agni || 'Mandagni',
+            kostha: patient.ayushAssessment?.kostha || 'Krura Kostha',
+            bala: patient.ayushAssessment?.bala || 'Madhyama Rogibala',
+            clinicalNotes: ayushNotes,
+          }
+        : undefined,
+      generatedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      modelUsed,
+    };
+
     updatePatientRecord(patient.id, {
       chiefComplaints: [chiefComplaint],
+      doctorSummary: updatedSummary,
       physicianNotes,
       doctorApproved: true,
       status: 'completed',
@@ -136,6 +190,18 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
           {/* Action CTAs */}
           <div className="flex items-center gap-2.5 flex-wrap justify-end">
             <button
+              id="btn-regenerate-ai-summary"
+              type="button"
+              disabled={isGeneratingSummary}
+              onClick={handleRegenerate}
+              className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-60"
+              title="Re-query Gemini 2.5 Flash with interview transcript & extracted document JSON"
+            >
+              <RotateCw className={`w-4 h-4 text-indigo-700 ${isGeneratingSummary ? 'animate-spin' : ''}`} />
+              <span>{isGeneratingSummary ? 'Generating AI Summary...' : 'Regenerate AI Summary'}</span>
+            </button>
+
+            <button
               id="btn-toggle-inline-edit"
               type="button"
               onClick={() => setIsEditing(!isEditing)}
@@ -146,7 +212,7 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               }`}
             >
               <Edit3 className="w-4 h-4" />
-              <span>{isEditing ? 'Editing Mode Active' : 'Edit Summary'}</span>
+              <span>{isEditing ? 'Editing Active' : 'Edit Summary'}</span>
             </button>
 
             <button
@@ -171,6 +237,20 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
           </div>
         </div>
 
+        {/* AI Generation Source & Safety Badge */}
+        <div className="p-3 bg-gradient-to-r from-cyan-50 to-indigo-50 border border-cyan-200/80 rounded-xl flex items-center justify-between gap-3 text-xs text-slate-700 font-semibold flex-wrap">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>
+              <strong>Gemini-Powered Physician Summary</strong> ({modelUsed}): Strictly factual intake report synthesized from patient interview & uploaded records.
+            </span>
+          </div>
+          <div className="flex items-center gap-1 text-[11px] text-slate-500 font-medium bg-white/80 px-2.5 py-1 rounded-md border border-slate-200">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Clinical Rule: Zero Speculative Diagnoses</span>
+          </div>
+        </div>
+
         {/* Live Saved Banner feedback */}
         {savedSuccess && (
           <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center gap-2 text-xs sm:text-sm font-bold text-emerald-900 animate-fadeIn">
@@ -179,19 +259,22 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
           </div>
         )}
 
-        {/* Red Flag Warning Alert Box */}
+        {/* Priority Clinical Warning Flags Banner */}
         {hasRedFlags && (
           <div className="p-4 bg-red-50 border-2 border-red-400 rounded-xl flex items-start gap-3 text-red-950">
             <AlertTriangle className="w-6 h-6 text-red-600 shrink-0 mt-0.5" />
-            <div>
+            <div className="space-y-1">
               <span className="font-black text-sm uppercase tracking-wider text-red-700 block">
-                PRIORITY CLINICAL WARNING FLAGS:
+                PRIORITY CLINICAL WARNING FLAGS (MATCHED RULE SET):
               </span>
-              <div className="flex flex-wrap gap-2 mt-1">
-                {patient.redFlags.map((rf, idx) => (
+              <p className="text-xs text-red-900 font-medium">
+                The following urgent symptom combination was matched by the clinical intake safety engine during interview:
+              </p>
+              <div className="flex flex-wrap gap-2 mt-1.5">
+                {warningFlags.map((rf, idx) => (
                   <span
                     key={idx}
-                    className="px-2.5 py-1 bg-red-600 text-white text-xs font-black rounded-md"
+                    className="px-2.5 py-1 bg-red-600 text-white text-xs font-black rounded-md shadow-xs"
                   >
                     {rf}
                   </span>
@@ -202,18 +285,18 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
         )}
       </div>
 
-      {/* Main Split Layout: Structured History on Left, Document Timeline on Right */}
+      {/* Main Split Layout: Structured SOAP History on Left, Document Timeline on Right */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* LEFT COLUMN: Structured History (8 Cols) */}
+        {/* LEFT COLUMN: Structured History (7 Cols) */}
         <div className="lg:col-span-7 space-y-4">
           <div className="bg-white rounded-2xl p-6 border-2 border-slate-300 shadow-sm space-y-5">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <div className="flex items-center gap-2 text-base font-extrabold text-slate-900">
                 <Stethoscope className="w-5 h-5 text-cyan-800" />
-                <span>Structured Clinical Summary (SOAP History)</span>
+                <span>Physician-Facing Intake Summary (SOAP Format)</span>
               </div>
               <span className="text-xs text-slate-500 font-medium">
-                {isEditing ? 'Click any field to edit directly' : 'Inline fields locked (click Edit to modify)'}
+                {isEditing ? 'Click any field to edit directly' : 'Inline fields locked (click Edit Summary to modify)'}
               </span>
             </div>
 
@@ -243,7 +326,7 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               {isEditing ? (
                 <textarea
                   id="edit-field-hpi"
-                  rows={2}
+                  rows={3}
                   value={hpiText}
                   onChange={(e) => setHpiText(e.target.value)}
                   className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
@@ -261,31 +344,44 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   <span>Ayurvedic Assessment (Dashavidha Pariksha & Agni)</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="p-2 bg-white rounded-lg border border-emerald-200">
+                  <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
                     <span className="text-slate-500 font-bold block">Prakriti:</span>
                     <span className="font-extrabold text-emerald-950">
-                      {patient.ayushAssessment?.prakriti || 'Vata-Pitta Pradhana'}
+                      {patient.ayushAssessment?.prakriti || 'Vata-Kapha Pradhana'}
                     </span>
                   </div>
-                  <div className="p-2 bg-white rounded-lg border border-emerald-200">
+                  <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
                     <span className="text-slate-500 font-bold block">Jatharagni:</span>
                     <span className="font-extrabold text-emerald-950">
                       {patient.ayushAssessment?.agni || 'Mandagni (Sluggish Digestion)'}
                     </span>
                   </div>
-                  <div className="p-2 bg-white rounded-lg border border-emerald-200">
+                  <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
                     <span className="text-slate-500 font-bold block">Kostha:</span>
                     <span className="font-extrabold text-emerald-950">
                       {patient.ayushAssessment?.kostha || 'Krura Kostha (Hard Bowels)'}
                     </span>
                   </div>
-                  <div className="p-2 bg-white rounded-lg border border-emerald-200">
+                  <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
                     <span className="text-slate-500 font-bold block">Rogibala:</span>
                     <span className="font-extrabold text-emerald-950">
                       {patient.ayushAssessment?.bala || 'Madhyama Rogibala'}
                     </span>
                   </div>
                 </div>
+                {isEditing ? (
+                  <textarea
+                    rows={2}
+                    value={ayushNotes}
+                    onChange={(e) => setAyushNotes(e.target.value)}
+                    placeholder="Ayurvedic clinical observations & Samprapti notes..."
+                    className="w-full p-2.5 bg-white border border-emerald-300 rounded-lg text-xs font-medium text-slate-900"
+                  />
+                ) : ayushNotes ? (
+                  <p className="text-xs text-emerald-950 bg-white/70 p-2.5 rounded-lg border border-emerald-200 font-medium">
+                    {ayushNotes}
+                  </p>
+                ) : null}
               </div>
             )}
 
@@ -322,34 +418,53 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
                 />
               ) : (
-                <p className="text-sm font-semibold text-rose-900 leading-relaxed bg-rose-50/60 p-2 rounded-lg border border-rose-200">
+                <p className="text-sm font-semibold text-rose-900 leading-relaxed bg-rose-50/60 p-2.5 rounded-lg border border-rose-200">
                   {drugAllergyText}
                 </p>
               )}
             </div>
 
-            {/* 5. Personal & Family History */}
+            {/* 5. Family History */}
+            <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
+              <label className="text-xs font-black uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                <Heart className="w-4 h-4 text-indigo-600" />
+                <span>5. Family History (Kula Vrittanta)</span>
+              </label>
+              {isEditing ? (
+                <textarea
+                  id="edit-field-family-history"
+                  rows={2}
+                  value={familyHistoryText}
+                  onChange={(e) => setFamilyHistoryText(e.target.value)}
+                  className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-800 leading-relaxed">{familyHistoryText}</p>
+              )}
+            </div>
+
+            {/* 6. Personal History */}
             <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
               <label className="text-xs font-black uppercase tracking-wider text-slate-600 block">
-                5. Personal, Lifestyle & Family History (Kula Vrittanta)
+                6. Personal & Lifestyle History (Swabhava & Ahar-Vihar)
               </label>
               {isEditing ? (
                 <textarea
                   id="edit-field-personal-history"
                   rows={2}
-                  value={personalFamilyText}
-                  onChange={(e) => setPersonalFamilyText(e.target.value)}
+                  value={personalHistoryText}
+                  onChange={(e) => setPersonalHistoryText(e.target.value)}
                   className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
                 />
               ) : (
-                <p className="text-sm font-medium text-slate-800 leading-relaxed">{personalFamilyText}</p>
+                <p className="text-sm font-medium text-slate-800 leading-relaxed">{personalHistoryText}</p>
               )}
             </div>
 
-            {/* 6. Review of Systems (ROS) */}
+            {/* 7. Review of Systems (ROS) */}
             <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
               <label className="text-xs font-black uppercase tracking-wider text-slate-600 block">
-                6. Review of Systems (ROS / Sarva Anga Pariksha)
+                7. Review of Systems (ROS / Sarva Anga Pariksha)
               </label>
               {isEditing ? (
                 <textarea
@@ -472,7 +587,8 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               <p><strong>Hospital:</strong> All India Institute of Medical Sciences / OPD Wing</p>
               <p><strong>Consultant:</strong> {loggedInDoctor?.name || 'Dr. Rajesh Sharma, MD'}</p>
               <p><strong>Patient:</strong> {patient.name} ({patient.age}Y/{patient.gender}) • Token: {patient.tokenNumber}</p>
-              <p><strong>Diagnosis / Chief Complaint:</strong> {chiefComplaint}</p>
+              <p><strong>Chief Complaint:</strong> {chiefComplaint}</p>
+              <p><strong>HPI Summary:</strong> {hpiText}</p>
               <p><strong>Rx Notes:</strong> {physicianNotes || 'Standard symptomatic therapy advised.'}</p>
             </div>
 

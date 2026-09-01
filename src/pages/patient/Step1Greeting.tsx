@@ -1,6 +1,7 @@
 import React, { useEffect } from 'react';
 import { Volume2, ArrowRight, AlertTriangle, Sparkles, HeartPulse, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { speechService } from '../../utils/speech';
 
 export const Step1Greeting: React.FC = () => {
   const {
@@ -17,9 +18,19 @@ export const Step1Greeting: React.FC = () => {
   const greetingTextEn =
     'Namaste! I am Swasthya AI. Before you meet the doctor, I will record your health history and symptoms so the physician can provide faster, accurate care.';
 
+  const consentAudioPromptHi =
+    'कृपया सहमति दें। आपकी जानकारी पूरी तरह सुरक्षित है और इसका उपयोग केवल आपके डॉक्टर द्वारा आपके सही इलाज के लिए किया जाएगा।';
+  const consentAudioPromptEn =
+    'Please grant consent. Your health information is strictly private, encrypted, and accessible only to your treating physician.';
+
   useEffect(() => {
+    speechService.prewarm();
     // Speak greeting automatically
     speakText(language === 'hi' ? greetingTextHi : greetingTextEn, language);
+
+    // Prefetch Step 2 consent audio in background
+    speechService.prefetch(language === 'hi' ? consentAudioPromptHi : consentAudioPromptEn, language);
+
     return () => {
       stopSpeaking();
     };

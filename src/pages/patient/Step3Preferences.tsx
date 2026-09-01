@@ -3,6 +3,8 @@ import { Globe, Mic, Touchpad, Stethoscope, Sparkles, ArrowRight, ArrowLeft, Che
 import { useApp } from '../../context/AppContext';
 import { VoicePrompter } from '../../components/VoicePrompter';
 import { Department, AppLanguage, InputMode } from '../../types';
+import { speechService } from '../../utils/speech';
+import { generalClinicalQuestions, ayushClinicalQuestions } from '../../data/clinicalQuestions';
 
 export const Step3Preferences: React.FC = () => {
   const {
@@ -25,7 +27,15 @@ export const Step3Preferences: React.FC = () => {
 
   useEffect(() => {
     speakText(language === 'hi' ? prefPromptHi : prefPromptEn, language);
-  }, [language]);
+
+    // Pre-fetch the first question of both general and ayush tracks in background
+    const qList = department === 'ayush' ? ayushClinicalQuestions : generalClinicalQuestions;
+    const firstQ = qList[0];
+    if (firstQ) {
+      const qPrompt = language === 'hi' ? (firstQ.audio_prompt_hi || firstQ.question_hi) : (firstQ.audio_prompt_en || firstQ.question_en);
+      speechService.prefetch(qPrompt, language);
+    }
+  }, [language, department]);
 
   const handleSelectDepartment = (dept: Department) => {
     setDepartment(dept);

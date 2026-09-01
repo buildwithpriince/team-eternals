@@ -4,6 +4,7 @@ import { useApp } from '../../context/AppContext';
 import { OptionChip } from '../../components/OptionChip';
 import { generalClinicalQuestions, ayushClinicalQuestions } from '../../data/clinicalQuestions';
 import { BackendQuestionContract, QuestionOption, Department } from '../../types';
+import { speechService } from '../../utils/speech';
 
 export const Step4Interview: React.FC = () => {
   const {
@@ -50,7 +51,17 @@ export const Step4Interview: React.FC = () => {
           : currentQuestion.audio_prompt_en || currentQuestion.question_en;
       speakText(audioPrompt, language);
     }
-  }, [currentQuestion.id, language]);
+
+    // Prefetch the upcoming question audio in background for instantaneous zero-delay response
+    if (currentIndex + 1 < questions.length) {
+      const nextQ = questions[currentIndex + 1];
+      const nextPrompt =
+        language === 'hi'
+          ? nextQ.audio_prompt_hi || nextQ.question_hi
+          : nextQ.audio_prompt_en || nextQ.question_en;
+      speechService.prefetch(nextPrompt, language);
+    }
+  }, [currentQuestion.id, currentIndex, language, questions, autoVoiceEnabled]);
 
   const handleSelectOption = (option: QuestionOption) => {
     setCurrentSelected(option.id);

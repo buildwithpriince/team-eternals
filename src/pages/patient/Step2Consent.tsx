@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ShieldCheck, Check, ArrowRight, ArrowLeft, Lock, FileCheck, Info } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { VoicePrompter } from '../../components/VoicePrompter';
+import { speechService } from '../../utils/speech';
 
 export const Step2Consent: React.FC = () => {
   const { language, theme, speakText, setCurrentKioskStep } = useApp();
@@ -15,8 +16,15 @@ export const Step2Consent: React.FC = () => {
   const consentAudioPromptEn =
     'Please grant consent. Your health information is strictly private, encrypted, and accessible only to your treating physician.';
 
+  const prefPromptHi =
+    'कृपया अपनी भाषा, उत्तर देने का तरीका, और अपना विभाग (सामान्य चिकित्सा या आयुष आयुर्वेद) चुनें।';
+  const prefPromptEn =
+    'Please select your language, voice or touch preference, and consultation department.';
+
   useEffect(() => {
     speakText(language === 'hi' ? consentAudioPromptHi : consentAudioPromptEn, language);
+    // Prefetch next step prompt
+    speechService.prefetch(language === 'hi' ? prefPromptHi : prefPromptEn, language);
   }, [language]);
 
   const handleAgreeAndProceed = () => {

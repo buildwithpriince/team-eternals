@@ -24,6 +24,7 @@ function getAI(): GoogleGenAI | null {
 
 // In-memory cache for synthesized voice prompts to guarantee fast response
 const audioCache = new Map<string, { audioBase64: string; mimeType: string }>();
+let ttsRateLimitCooldownUntil = 0;
 
 async function startServer() {
   const app = express();
@@ -49,7 +50,10 @@ async function startServer() {
       }
 
       const cleanText = text.trim();
-      const styleInstruction = 'Say gently and warmly, like a caring mid-age nurse reassuring a patient:';
+      const styleInstruction =
+        language === 'en'
+          ? 'Speak in a gentle, warm, polite, and reassuring Indian feminine voice with an authentic Indian English accent, like a caring Indian female hospital nurse assisting a patient:'
+          : 'Speak gently, clearly, and warmly in natural Hindi with a caring, respectful feminine voice, like a compassionate female hospital nurse assisting a patient:';
       const prompt = `${styleInstruction} ${cleanText}`;
       const cacheKey = `${voice}:${language}:${cleanText}`;
 
@@ -64,6 +68,15 @@ async function startServer() {
         res.json({
           fallback: true,
           error: 'GEMINI_API_KEY is not configured on the server',
+        });
+        return;
+      }
+
+      // If in cooldown from recent 429 rate limits, skip remote call and use silent client fallback
+      if (Date.now() < ttsRateLimitCooldownUntil) {
+        res.json({
+          fallback: true,
+          error: 'Rate limit active, using browser voice fallback',
         });
         return;
       }
@@ -103,9 +116,14 @@ async function startServer() {
           if (response?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
             break;
           }
-        } catch (mErr) {
+        } catch (mErr: unknown) {
           lastError = mErr;
-          console.warn(`TTS attempt with model ${modelName} (${voice}) failed:`, mErr instanceof Error ? mErr.message : mErr);
+          const errMsg = mErr instanceof Error ? mErr.message : String(mErr);
+          if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
+            // Set a 60s cooldown before retrying cloud TTS to smoothly use client fallback
+            ttsRateLimitCooldownUntil = Date.now() + 60000;
+            break;
+          }
         }
       }
 
@@ -113,11 +131,9 @@ async function startServer() {
       const mimeType = response?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.mimeType || 'audio/pcm;rate=24000';
 
       if (!audioBase64) {
-        const errMessage = lastError instanceof Error ? lastError.message : 'Gemini TTS unavailable, falling back';
-        console.warn('Gemini TTS returned no audio, signaling client fallback:', errMessage);
         res.json({
           fallback: true,
-          error: errMessage,
+          message: 'Client speech synthesis fallback active',
         });
         return;
       }
@@ -131,12 +147,10 @@ async function startServer() {
       audioCache.set(cacheKey, result);
 
       res.json(result);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Unknown TTS error';
-      console.warn('Gemini TTS server error, signaling fallback:', message);
+    } catch {
       res.json({
         fallback: true,
-        error: message,
+        message: 'Client speech synthesis fallback active',
       });
     }
   });

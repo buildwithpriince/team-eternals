@@ -1,7 +1,8 @@
 import React from 'react';
-import { Stethoscope, Globe, Sparkles, UserCheck, HeartPulse, RefreshCw } from 'lucide-react';
+import { Stethoscope, Sparkles, UserCheck, RefreshCw } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { EmergencyButton } from './EmergencyButton';
+import { LanguageSwitcher } from './LanguageSwitcher';
 
 export const ThemeSwitcherHeader: React.FC = () => {
   const {
@@ -103,33 +104,8 @@ export const ThemeSwitcherHeader: React.FC = () => {
 
         {/* Right: Language Selector + Reset Flow + Emergency Button */}
         <div className="flex items-center gap-2.5">
-          {/* Language Toggle */}
-          <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs font-bold">
-            <button
-              id="btn-lang-hi"
-              type="button"
-              onClick={() => setLanguage('hi')}
-              className={`px-2.5 py-1 rounded cursor-pointer transition-colors ${
-                language === 'hi'
-                  ? 'bg-white text-[#102A43] shadow-2xs font-extrabold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              हिंदी
-            </button>
-            <button
-              id="btn-lang-en"
-              type="button"
-              onClick={() => setLanguage('en')}
-              className={`px-2.5 py-1 rounded cursor-pointer transition-colors ${
-                language === 'en'
-                  ? 'bg-white text-[#102A43] shadow-2xs font-extrabold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              English
-            </button>
-          </div>
+          {/* Language Toggle with Smooth Fade Animation */}
+          <LanguageSwitcher size="sm" />
 
           {/* Reset Kiosk Button */}
           {appView === 'kiosk' && (

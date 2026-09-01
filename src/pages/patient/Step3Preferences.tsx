@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import { Globe, Mic, Touchpad, Stethoscope, Sparkles, ArrowRight, ArrowLeft, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { VoicePrompter } from '../../components/VoicePrompter';
@@ -90,7 +91,7 @@ export const Step3Preferences: React.FC = () => {
             id="btn-pref-lang-hi"
             type="button"
             onClick={() => setLanguage('hi')}
-            className={`p-5 rounded-2xl border-3 flex items-center justify-between text-left transition-all active:scale-[0.98] cursor-pointer min-h-[72px] ${
+            className={`relative p-5 rounded-2xl border-3 flex items-center justify-between text-left transition-all active:scale-[0.98] cursor-pointer min-h-[72px] ${
               language === 'hi'
                 ? 'bg-amber-50/60 border-amber-600 shadow-md ring-2 ring-amber-300'
                 : 'bg-white border-slate-300 hover:border-slate-400'
@@ -104,16 +105,25 @@ export const Step3Preferences: React.FC = () => {
                 सरल हिंदी में प्रश्न व आवाज
               </span>
             </div>
-            {language === 'hi' && (
-              <CheckCircle2 className="w-8 h-8 text-amber-700 shrink-0" />
-            )}
+            <AnimatePresence>
+              {language === 'hi' && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.7 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <CheckCircle2 className="w-8 h-8 text-amber-700 shrink-0" />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </button>
 
           <button
             id="btn-pref-lang-en"
             type="button"
             onClick={() => setLanguage('en')}
-            className={`p-5 rounded-2xl border-3 flex items-center justify-between text-left transition-all active:scale-[0.98] cursor-pointer min-h-[72px] ${
+            className={`relative p-5 rounded-2xl border-3 flex items-center justify-between text-left transition-all active:scale-[0.98] cursor-pointer min-h-[72px] ${
               language === 'en'
                 ? 'bg-blue-50/60 border-blue-600 shadow-md ring-2 ring-blue-300'
                 : 'bg-white border-slate-300 hover:border-slate-400'
@@ -127,9 +137,18 @@ export const Step3Preferences: React.FC = () => {
                 English audio & text interview
               </span>
             </div>
-            {language === 'en' && (
-              <CheckCircle2 className="w-8 h-8 text-blue-700 shrink-0" />
-            )}
+            <AnimatePresence>
+              {language === 'en' && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.7 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.7 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <CheckCircle2 className="w-8 h-8 text-blue-700 shrink-0" />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </button>
         </div>
       </div>

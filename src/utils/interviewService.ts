@@ -60,11 +60,13 @@ function getDeterministicFallbackQuestion(
       input_type: "single_select",
       options: [
         { id: "fever", text_en: "Fever & Body Shivers", text_hi: "बुखार एवं शरीर में कंपकंपी" },
+        { id: "cough_breath", text_en: "Cough or Breathing Trouble", text_hi: "खांसी या सांस लेने में तकलीफ" },
+        { id: "stomach_pain", text_en: "Stomach Pain, Acidity or Vomiting", text_hi: "पेट दर्द, एसिडिटी या उल्टी" },
+        { id: "body_joint_pain", text_en: "Body Ache, Joint or Back Pain", text_hi: "बदन दर्द, जोड़ों या कमर का दर्द" },
         { id: "chest_pain", text_en: "Chest Pain or Heavy Pressure", text_hi: "सीने में दर्द या भारीपन", red_flag: true, red_flag_reason: "Suspected Acute Coronary Syndrome / Angina (Immediate ECG & Cardiac Triage)" },
-        { id: "cough_breath", text_en: "Cough or Difficulty Breathing", text_hi: "खांसी या सांस लेने में तकलीफ" },
-        { id: "stomach_pain", text_en: "Stomach Ache, Gas or Vomiting", text_hi: "पेट दर्द, गैस या उल्टी" },
-        { id: "joint_pain", text_en: "Joint Pain, Backache or Body Weakness", text_hi: "जोड़ों का दर्द, कमर दर्द या कमजोरी" },
-        { id: "other", text_en: "Other symptom / Let me speak", text_hi: "अन्य तकलीफ / बोलकर बताएं" }
+        { id: "headache_dizzy", text_en: "Headache or Dizziness", text_hi: "सिरदर्द या चक्कर आना" },
+        { id: "skin_issue", text_en: "Skin Rash, Itching or Allergy", text_hi: "त्वचा पर दाने, खुजली या एलर्जी" },
+        { id: "injury_wound", text_en: "Recent Injury, Cut or Fall", text_hi: "चोट, घाव या गिरने से दर्द" },
       ],
       section: "chief_complaint",
       symptom_tags: ["primary_concern"],

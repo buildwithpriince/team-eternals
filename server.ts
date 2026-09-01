@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { matchSemanticsLocally } from './src/utils/aiMatcher';
 
@@ -84,8 +84,6 @@ async function startServer() {
       }
 
       const modelsToTry = [
-        'gemini-2.5-flash-preview-tts',
-        'gemini-2.5-pro-preview-tts',
         'gemini-3.1-flash-tts-preview',
       ];
       let response = null;
@@ -121,9 +119,9 @@ async function startServer() {
         } catch (mErr: unknown) {
           lastError = mErr;
           const errMsg = mErr instanceof Error ? mErr.message : String(mErr);
-          if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
-            // Set a 60s cooldown before retrying cloud TTS to smoothly use client fallback
-            ttsRateLimitCooldownUntil = Date.now() + 60000;
+          if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota') || errMsg.includes('404') || errMsg.includes('NOT_FOUND')) {
+            // Set a 45s cooldown before retrying cloud TTS to smoothly use client fallback
+            ttsRateLimitCooldownUntil = Date.now() + 45000;
             break;
           }
         }
@@ -156,6 +154,9 @@ async function startServer() {
       });
     }
   });
+
+  let interviewRateLimitCooldownUntil = 0;
+  let summaryRateLimitCooldownUntil = 0;
 
   // Conversational History Engine: Turn-by-Turn Dynamic Intake Endpoint (Gemini-Powered)
   // Implements the Swasthya AI System Prompt Spec for live per-turn question generation.
@@ -215,10 +216,18 @@ internal section label.
 
 ## Rules
 - Ask exactly ONE question per turn. Never stack multiple questions.
-- Every question must be answerable by a short spoken sentence OR a tap —
-  so always populate \`options\` with 2–5 plausible short answers, even for
-  questions that feel open-ended (include an "Other / let me say it" option
-  that maps to free-text voice input).
+- Every question MUST include an \`options\` array with 4–8 plausible answer chips.
+- For the chief-complaint turn (Turn 1 / opening question), ALWAYS provide 6–8 common OPD chief-complaint option chips:
+  1. Fever & Body Shivers (बुखार एवं कंपकंपी)
+  2. Cough or Breathing Trouble (खांसी या सांस लेने में तकलीफ)
+  3. Stomach Pain, Acidity or Vomiting (पेट दर्द, एसिडिटी या उल्टी)
+  4. Body Ache, Joint or Back Pain (बदन दर्द, जोड़ों या कमर का दर्द)
+  5. Chest Pain or Heavy Pressure (सीने में दर्द या भारीपन - red flag)
+  6. Headache or Dizziness (सिरदर्द या चक्कर आना)
+  7. Skin Rash, Itching or Allergy (त्वचा पर दाने, खुजली या एलर्जी)
+  8. Recent Injury, Cut or Fall (हालिया चोट, घाव या गिरने से दर्द)
+- For all other questions, always provide 3–6 plausible short answer chips matching the question.
+- Always set "input_type" to "single_select" or "multi_select". Never omit the options array or default to free-text-only. (The client UI automatically renders both the tappable options grid AND an integrated free-text / voice entry box as a universal fallback for anything not listed).
 - Keep question phrasing at a 5th-grade reading level. No medical jargon
   ("radiating" becomes "does it move to another part of your body?").
 - Always produce BOTH English and Hindi phrasing for the question and
@@ -241,9 +250,9 @@ internal section label.
 {
   "question_en": "string",
   "question_hi": "string",
-  "input_type": "single_select" | "free_text",
+  "input_type": "single_select" | "multi_select",
   "options": [
-    {"id": "a", "text_en": "string", "text_hi": "string"}
+    {"id": "a", "text_en": "string", "text_hi": "string", "red_flag": false, "red_flag_reason": "optional string"}
   ],
   "section": "chief_complaint" | "hpi" | "past_history" | "drug_allergy" |
              "family_history" | "personal_history" | "ros" |
@@ -256,8 +265,8 @@ internal section label.
       const ai = getAI();
       let generatedTurn: any = null;
 
-      if (ai) {
-        const candidateModels = ['gemini-3.7-flash', 'gemini-2.5-flash', 'gemini-3.1-flash-lite'];
+      if (ai && Date.now() >= interviewRateLimitCooldownUntil) {
+        const candidateModels = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
 
         for (const modelName of candidateModels) {
           try {
@@ -266,10 +275,6 @@ internal section label.
               responseMimeType: 'application/json',
               systemInstruction: systemPrompt,
             };
-
-            if (modelName.startsWith('gemini-3')) {
-              config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
-            }
 
             const prompt = `Based on the PATIENT STATE SO FAR, generate the single next best question in the clinical intake sequence. Output ONLY valid JSON matching the specified schema.`;
 
@@ -297,9 +302,17 @@ internal section label.
                 break;
               }
             }
-          } catch (modelErr) {
-            console.warn(`Interview turn generation error with ${modelName}:`, modelErr);
+          } catch (modelErr: any) {
+            const errMsg = modelErr?.message || String(modelErr);
+            console.warn(`Interview turn generation fallback from ${modelName}:`, errMsg);
+            // If quota/rate limit error, continue trying next candidate model
+            if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
+              continue;
+            }
           }
+        }
+        if (!generatedTurn) {
+          interviewRateLimitCooldownUntil = Date.now() + 30000;
         }
       }
 
@@ -308,23 +321,167 @@ internal section label.
         return;
       }
 
-      // Fallback if AI client not configured or transient error
+      // Fallback if AI client not configured or transient error/quota cooldown
+      const turnsCount = Array.isArray(structured_state_json?.turns) ? structured_state_json.turns.length : 0;
+      if (turnsCount === 0) {
+        res.json({
+          question_en: 'What is the main reason for your hospital visit today?',
+          question_hi: 'आज अस्पताल आने का आपका मुख्य कारण क्या है?',
+          input_type: 'single_select',
+          options: [
+            { id: 'fever', text_en: 'Fever & Body Shivers', text_hi: 'बुखार एवं शरीर में कंपकंपी' },
+            { id: 'cough_breath', text_en: 'Cough or Breathing Trouble', text_hi: 'खांसी या सांस लेने में तकलीफ' },
+            { id: 'stomach_pain', text_en: 'Stomach Pain, Acidity or Vomiting', text_hi: 'पेट दर्द, एसिडिटी या उल्टी' },
+            { id: 'body_joint_pain', text_en: 'Body Ache, Joint or Back Pain', text_hi: 'बदन दर्द, जोड़ों या कमर का दर्द' },
+            { id: 'chest_pain', text_en: 'Chest Pain or Heavy Pressure', text_hi: 'सीने में दर्द या भारीपन', red_flag: true, red_flag_reason: 'Suspected Acute Coronary Syndrome / Angina (Immediate ECG & Cardiac Triage)' },
+            { id: 'headache_dizzy', text_en: 'Headache or Dizziness', text_hi: 'सिरदर्द या चक्कर आना' },
+            { id: 'skin_issue', text_en: 'Skin Rash, Itching or Allergy', text_hi: 'त्वचा पर दाने, खुजली या एलर्जी' },
+            { id: 'injury_wound', text_en: 'Recent Injury, Cut or Fall', text_hi: 'चोट, घाव या गिरने से दर्द' },
+          ],
+          section: 'chief_complaint',
+          symptom_tags: ['primary_concern'],
+          section_complete: false,
+          interview_complete: false,
+          modelUsed: 'Adaptive Clinical Rules Engine',
+        });
+        return;
+      }
+
+      if (turnsCount === 1) {
+        res.json({
+          question_en: 'How long have you been having this problem?',
+          question_hi: 'यह तकलीफ आपको कितने दिनों या समय से हो रही है?',
+          input_type: 'single_select',
+          options: [
+            { id: 'dur_today', text_en: 'Started suddenly today (< 24 hours)', text_hi: 'आज अचानक शुरू हुआ (24 घंटे से कम)' },
+            { id: 'dur_few_days', text_en: '2 to 7 days (Past week)', text_hi: '2 से 7 दिन (पिछले एक हफ्ते से)' },
+            { id: 'dur_weeks', text_en: '1 to 4 weeks (About a month)', text_hi: '1 से 4 हफ्ते (लगभग एक महीने से)' },
+            { id: 'dur_chronic', text_en: 'More than 1 to 3 months (Long term)', text_hi: '1 से 3 महीने या उससे अधिक समय से' },
+          ],
+          section: 'chief_complaint',
+          symptom_tags: ['duration', 'timeline'],
+          section_complete: true,
+          interview_complete: false,
+          modelUsed: 'Adaptive Clinical Rules Engine',
+        });
+        return;
+      }
+
+      if (turnsCount === 2) {
+        res.json({
+          question_en: 'How severe is your discomfort, and does it spread anywhere else?',
+          question_hi: 'तकलीफ कितनी तेज है, और क्या यह शरीर के किसी अन्य हिस्से में फैलती है?',
+          input_type: 'single_select',
+          options: [
+            { id: 'sev_mild', text_en: 'Mild — Can easily manage daily work', text_hi: 'हल्की — रोजमर्रा का काम कर पा रहे हैं' },
+            { id: 'sev_moderate', text_en: 'Moderate — Disturbing sleep and routine', text_hi: 'मध्यम — नींद व काम में बाधा आ रही है' },
+            { id: 'sev_severe_spread', text_en: 'Severe and spreads to arm, jaw or back', text_hi: 'बहुत तेज है और हाथ, जबड़े या पीठ में फैल रहा है', red_flag: true, red_flag_reason: 'Suspected Acute Coronary Syndrome / Angina' },
+            { id: 'sev_severe_local', text_en: 'Severe / Unbearable (stays in one spot)', text_hi: 'असहनीय तेज दर्द (एक ही जगह पर)', red_flag: true, red_flag_reason: 'Pain Scale 9-10/10 requires immediate analgesic triage' },
+          ],
+          section: 'hpi',
+          symptom_tags: ['severity', 'radiation', 'quality'],
+          section_complete: true,
+          interview_complete: false,
+          modelUsed: 'Adaptive Clinical Rules Engine',
+        });
+        return;
+      }
+
+      if (turnsCount === 3) {
+        res.json({
+          question_en: 'Do you have any existing long-term medical conditions like BP or Sugar?',
+          question_hi: 'क्या आपको पहले से कोई पुरानी बीमारी जैसे ब्लड प्रेशर या शुगर है?',
+          input_type: 'single_select',
+          options: [
+            { id: 'pmh_none', text_en: 'No known long-term illness', text_hi: 'कोई पुरानी बीमारी नहीं है' },
+            { id: 'pmh_htn_dm', text_en: 'High Blood Pressure or Diabetes', text_hi: 'हाई ब्लड प्रेशर या शुगर (मधुमेह)' },
+            { id: 'pmh_heart_kidney', text_en: 'Heart disease, Asthma, or Kidney problem', text_hi: 'हृदय रोग, दमा (अस्थमा) या गुर्दे की समस्या' },
+            { id: 'pmh_prior_surg', text_en: 'Prior major surgery in the past', text_hi: 'पूर्व में कोई बड़ा ऑपरेशन/सर्जरी हुई है' },
+          ],
+          section: 'past_history',
+          symptom_tags: ['comorbidities'],
+          section_complete: true,
+          interview_complete: false,
+          modelUsed: 'Adaptive Clinical Rules Engine',
+        });
+        return;
+      }
+
+      if (turnsCount === 4) {
+        res.json({
+          question_en: 'Are you taking regular medications, or do you have any drug allergy?',
+          question_hi: 'क्या आप नियमित दवाइयां ले रहे हैं, या किसी दवा से कोई एलर्जी है?',
+          input_type: 'single_select',
+          options: [
+            { id: 'med_none', text_en: 'No regular medications and No drug allergies (NKDA)', text_hi: 'कोई नियमित दवा नहीं और कोई दवा एलर्जी नहीं' },
+            { id: 'med_regular', text_en: 'Taking regular daily prescriptions (BP/Diabetes/Thyroid)', text_hi: 'नियमित दवाइयां ले रहे हैं (बीपी/शुगर/थायराइड)' },
+            { id: 'med_allergy_penicillin', text_en: 'Allergy to Penicillin / Sulfa / Painkillers', text_hi: 'पेनिसिलिन, सल्फा या दर्द निवारक दवाओं से एलर्जी है' },
+            { id: 'med_ayurvedic', text_en: 'Taking Ayurvedic, Homeopathic or herbal supplements', text_hi: 'आयुर्वेदिक, होम्योपैथिक या हर्बल दवाइयां ले रहे हैं' },
+          ],
+          section: 'drug_allergy',
+          symptom_tags: ['medications', 'drug_allergy'],
+          section_complete: true,
+          interview_complete: false,
+          modelUsed: 'Adaptive Clinical Rules Engine',
+        });
+        return;
+      }
+
+      if (turnsCount === 5) {
+        res.json({
+          question_en: 'Does anyone in your direct family (parents or siblings) have heart disease or diabetes?',
+          question_hi: 'क्या आपके परिवार में माता-पिता या भाई-बहन को हृदय रोग या शुगर की बीमारी है?',
+          input_type: 'single_select',
+          options: [
+            { id: 'fam_none', text_en: 'No major hereditary illness in family', text_hi: 'परिवार में कोई गंभीर अनुवांशिक बीमारी नहीं है' },
+            { id: 'fam_heart', text_en: 'Heart attack or heart stent at early age in family', text_hi: 'परिवार में कम उम्र में हार्ट अटैक या दिल की बीमारी' },
+            { id: 'fam_dm_htn', text_en: 'Diabetes or Hypertension runs in parents', text_hi: 'माता-पिता में शुगर या हाई बीपी की समस्या' },
+            { id: 'fam_asthma', text_en: 'Asthma or severe allergies in family', text_hi: 'परिवार में दमा (अस्थमा) या एलर्जी' },
+          ],
+          section: 'family_history',
+          symptom_tags: ['family_history'],
+          section_complete: true,
+          interview_complete: false,
+          modelUsed: 'Adaptive Clinical Rules Engine',
+        });
+        return;
+      }
+
+      if (mode === 'ayush') {
+        res.json({
+          question_en: 'How is your appetite, digestion, and daily bowel movement?',
+          question_hi: 'आपकी भूख, पाचन क्रिया और पेट साफ होने की स्थिति कैसी रहती है?',
+          input_type: 'single_select',
+          options: [
+            { id: 'agni_sama', text_en: 'Normal digestion, daily clear bowel (Samagni)', text_hi: 'सामान्य पाचन, रोज पेट अच्छी तरह साफ होता है (समाग्नि)' },
+            { id: 'agni_manda', text_en: 'Sluggish digestion, heaviness after food, constipation (Mandagni)', text_hi: 'पाचन धीमा, खाने के बाद भारीपन व कब्ज (मंदाग्नि)' },
+            { id: 'agni_teekshna', text_en: 'Excess burning hunger, acidity and loose motions (Tikshnagni)', text_hi: 'तेज जलन वाली भूख, एसिडिटी और दस्त (तीक्ष्णाग्नि)' },
+            { id: 'agni_visham', text_en: 'Irregular appetite, frequent gas and bloating (Vishamagni)', text_hi: 'अनियमित भूख, गैस और पेट फूलना (विषमाग्नि)' },
+          ],
+          section: 'dashavidha_pariksha',
+          symptom_tags: ['agni', 'digestion', 'kostha'],
+          section_complete: true,
+          interview_complete: true,
+          modelUsed: 'Adaptive Clinical Rules Engine',
+        });
+        return;
+      }
+
       res.json({
-        question_en: 'What is the main reason for your hospital visit today?',
-        question_hi: 'आज अस्पताल आने का आपका मुख्य कारण क्या है?',
+        question_en: 'Do you have any other associated symptoms like fever, weight loss, or swelling in feet?',
+        question_hi: 'क्या आपको बुखार, अचानक वजन कम होना या पैरों में सूजन जैसा कोई अन्य लक्षण है?',
         input_type: 'single_select',
         options: [
-          { id: 'fever', text_en: 'Fever & Body Shivers', text_hi: 'बुखार एवं शरीर में कंपकंपी' },
-          { id: 'chest_pain', text_en: 'Chest Pain or Discomfort', text_hi: 'सीने में दर्द या भारीपन' },
-          { id: 'cough_breath', text_en: 'Cough or Difficulty in Breathing', text_hi: 'खांसी या सांस लेने में तकलीफ' },
-          { id: 'stomach_pain', text_en: 'Stomach Ache or Vomiting', text_hi: 'पेट दर्द या उल्टी' },
-          { id: 'other', text_en: 'Other symptom / Let me speak', text_hi: 'अन्य तकलीफ / बोलकर बताएं' },
+          { id: 'ros_none', text_en: 'None of these (No fever, swelling, or weight loss)', text_hi: 'इनमें से कोई नहीं (बुखार, सूजन या वजन घटना नहीं है)' },
+          { id: 'ros_fever', text_en: 'Mild fever or night chills', text_hi: 'हल्का बुखार या रात में ठंड लगना' },
+          { id: 'ros_swelling', text_en: 'Swelling in feet or around eyes', text_hi: 'पैरों में या आंखों के आसपास सूजन' },
+          { id: 'ros_fatigue', text_en: 'Severe general fatigue and weakness', text_hi: 'अत्यधिक कमजोरी व थकान महसूस होना' },
         ],
-        section: 'chief_complaint',
-        symptom_tags: ['primary_concern'],
-        section_complete: false,
-        interview_complete: false,
-        modelUsed: 'Deterministic Fallback',
+        section: 'ros',
+        symptom_tags: ['associated_symptoms', 'ros'],
+        section_complete: true,
+        interview_complete: true,
+        modelUsed: 'Adaptive Clinical Rules Engine',
       });
     } catch (err) {
       console.error('Error in interview-next-turn:', err);
@@ -332,7 +489,7 @@ internal section label.
     }
   });
 
-  // Gemini-Powered Physician Summary Generation Endpoint (gemini-2.5-flash / gemini-2.5-pro)
+  // Gemini-Powered Physician Summary Generation Endpoint (gemini-3.7-flash / gemini-3.1-flash-lite / gemini-flash-latest)
   // Generates structured SOAP clinical summaries from patient interview transcripts and digitized documents.
   // Rule: Must never suggest a diagnosis or interpret findings; only summarizes what was reported.
   app.post('/api/generate-doctor-summary', async (req, res) => {
@@ -432,8 +589,8 @@ Return ONLY a valid JSON object matching this schema:
       const ai = getAI();
       let generatedSummary: any = null;
 
-      if (ai) {
-        const candidateModels = ['gemini-2.5-flash', 'gemini-3.7-flash', 'gemini-2.5-pro'];
+      if (ai && Date.now() >= summaryRateLimitCooldownUntil) {
+        const candidateModels = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
 
         for (const modelName of candidateModels) {
           try {
@@ -443,10 +600,6 @@ Return ONLY a valid JSON object matching this schema:
               systemInstruction:
                 'You are a senior physician documentation assistant. Create structured, objective, physician-facing SOAP summaries. NEVER suggest a diagnosis or interpret findings; summarize only what was reported by the patient and extracted from records. Only include red-flags that were already matched by the rule set.',
             };
-
-            if (modelName.startsWith('gemini-3')) {
-              config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
-            }
 
             const response = await ai.models.generateContent({
               model: modelName,
@@ -482,9 +635,16 @@ Return ONLY a valid JSON object matching this schema:
                 break;
               }
             }
-          } catch (modelErr) {
-            console.warn(`Summary generation error with ${modelName}:`, modelErr);
+          } catch (modelErr: any) {
+            const errMsg = modelErr?.message || String(modelErr);
+            console.warn(`Summary generation fallback from ${modelName}:`, errMsg);
+            if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('quota')) {
+              continue;
+            }
           }
+        }
+        if (!generatedSummary) {
+          summaryRateLimitCooldownUntil = Date.now() + 30000;
         }
       }
 
@@ -616,7 +776,7 @@ Return ONLY a JSON object:
 
       if (ai && Date.now() >= matcherRateLimitCooldownUntil) {
         // Supported models for fast bilingual semantic classification
-        const fastModels = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-2.5-flash'];
+        const fastModels = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
 
         for (const modelName of fastModels) {
           try {
@@ -627,11 +787,6 @@ Return ONLY a JSON object:
                 'You are a high-speed bilingual clinical triage matcher in an Indian hospital OPD. Convert natural spoken language (including numbers, durations like "5 months", pain scales, Hindi/Hinglish expressions, and negations) to the single most precise option ID from the given list. Output JSON with {"matchedIds": string[]}.',
               responseMimeType: 'application/json',
             };
-
-            // Set thinkingLevel only for Gemini 3 series models
-            if (modelName.startsWith('gemini-3')) {
-              config.thinkingConfig = { thinkingLevel: ThinkingLevel.MINIMAL };
-            }
 
             const response = await ai.models.generateContent({
               model: modelName,
@@ -676,13 +831,13 @@ Return ONLY a JSON object:
             }
           } catch (genErr: any) {
             const errMsg = genErr?.message || String(genErr);
+            console.warn(`Voice matcher fallback from ${modelName}:`, errMsg);
             if (errMsg.includes('503') || errMsg.includes('UNAVAILABLE') || errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED')) {
-              // Upstream model spike or rate limit encountered; back off briefly and use instant local semantic engine
-              matcherRateLimitCooldownUntil = Date.now() + 30000;
-              break;
+              continue;
             }
           }
         }
+        matcherRateLimitCooldownUntil = Date.now() + 30000;
       }
 
       // High-accuracy semantic duration & clinical heuristic fallback

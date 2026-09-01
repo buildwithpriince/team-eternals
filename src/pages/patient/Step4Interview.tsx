@@ -75,6 +75,9 @@ export const Step4Interview: React.FC = () => {
     input_type: 'single_select',
     options: [
       { id: 'fever', text_en: 'Fever & Body Shivers', text_hi: 'बुखार एवं शरीर में कंपकंपी' },
+      { id: 'cough_breath', text_en: 'Cough or Breathing Trouble', text_hi: 'खांसी या सांस लेने में तकलीफ' },
+      { id: 'stomach_pain', text_en: 'Stomach Pain, Acidity or Vomiting', text_hi: 'पेट दर्द, एसिडिटी या उल्टी' },
+      { id: 'body_joint_pain', text_en: 'Body Ache, Joint or Back Pain', text_hi: 'बदन दर्द, जोड़ों या कमर का दर्द' },
       {
         id: 'chest_pain',
         text_en: 'Chest Pain or Heavy Pressure',
@@ -82,10 +85,9 @@ export const Step4Interview: React.FC = () => {
         red_flag: true,
         red_flag_reason: 'Suspected Acute Coronary Syndrome / Angina (Immediate ECG & Cardiac Triage)',
       },
-      { id: 'cough_breath', text_en: 'Cough or Difficulty Breathing', text_hi: 'खांसी या सांस लेने में तकलीफ' },
-      { id: 'stomach_pain', text_en: 'Stomach Ache, Gas or Vomiting', text_hi: 'पेट दर्द, गैस या उल्टी' },
-      { id: 'joint_pain', text_en: 'Joint Pain, Backache or Body Weakness', text_hi: 'जोड़ों का दर्द, कमर दर्द या कमजोरी' },
-      { id: 'other', text_en: 'Other symptom / Let me speak', text_hi: 'अन्य तकलीफ / बोलकर बताएं' },
+      { id: 'headache_dizzy', text_en: 'Headache or Dizziness', text_hi: 'सिरदर्द या चक्कर आना' },
+      { id: 'skin_issue', text_en: 'Skin Rash, Itching or Allergy', text_hi: 'त्वचा पर दाने, खुजली या एलर्जी' },
+      { id: 'injury_wound', text_en: 'Recent Injury, Cut or Fall', text_hi: 'चोट, घाव या गिरने से दर्द' },
     ],
     section: 'chief_complaint',
     symptom_tags: ['primary_concern'],
@@ -189,6 +191,9 @@ export const Step4Interview: React.FC = () => {
   // Option selection handler
   const handleSelectOption = useCallback(
     (option: QuestionOption) => {
+      // Clear custom free text if an option chip is explicitly clicked (last action wins)
+      setCustomFreeText('');
+
       if (currentQuestion.input_type === 'multi_select') {
         const isNoneOption =
           option.id.includes('none') ||
@@ -262,10 +267,13 @@ export const Step4Interview: React.FC = () => {
           setVoiceTranscript(rawTranscript);
           setIsListening(false);
 
-          // Handle free-text questions
-          if (currentQuestion.input_type === 'free_text') {
-            if (activeQuestionIdRef.current !== targetQuestionId) return;
+          const hasOptions = currentQuestion.options && currentQuestion.options.length > 0;
+
+          // If no options exist, populate free text directly
+          if (!hasOptions) {
             setCustomFreeText(rawTranscript);
+            setCurrentSelected(undefined);
+            setSelectedOptionIds([]);
             setVoiceFeedback({
               text:
                 language === 'hi'
@@ -277,7 +285,7 @@ export const Step4Interview: React.FC = () => {
             return;
           }
 
-          // Instant Local Match
+          // 1. Instant Local Semantic Match
           const localSemanticResult = matchSemanticsLocally(rawTranscript, currentQuestion.options);
           let instantMatchedOption: QuestionOption | null = null;
 
@@ -287,7 +295,7 @@ export const Step4Interview: React.FC = () => {
                 localSemanticResult.matchedIds.includes(opt.id)
               );
               if (matchedOpts.length > 0) {
-                if (activeQuestionIdRef.current !== targetQuestionId) return;
+                setCustomFreeText('');
                 setSelectedOptionIds((prev) => {
                   const newIds = matchedOpts.map((o) => o.id);
                   const containsNone = newIds.some((id) => id.includes('none'));
@@ -303,13 +311,14 @@ export const Step4Interview: React.FC = () => {
                   type: 'success',
                 });
                 speechService.playChime('success');
+                return;
               }
             } else {
               instantMatchedOption =
                 currentQuestion.options.find((opt) => opt.id === localSemanticResult.matchedIds[0]) ||
                 null;
               if (instantMatchedOption) {
-                if (activeQuestionIdRef.current !== targetQuestionId) return;
+                setCustomFreeText('');
                 handleSelectOption(instantMatchedOption);
                 setVoiceFeedback({
                   text:
@@ -319,23 +328,21 @@ export const Step4Interview: React.FC = () => {
                   type: 'success',
                 });
                 speechService.playChime('success');
+                return;
               }
             }
           }
 
-          if (!instantMatchedOption) {
-            if (activeQuestionIdRef.current !== targetQuestionId) return;
-            setIsMatchingVoice(true);
-            setVoiceFeedback({
-              text:
-                language === 'hi'
-                  ? `Gemini AI सटीक उत्तर खोज रहा है... ("${rawTranscript}")`
-                  : `Matching precise option via Gemini AI... ("${rawTranscript}")`,
-              type: 'info',
-            });
-          }
+          // 2. Intelligent Cloud Gemini Matching
+          setIsMatchingVoice(true);
+          setVoiceFeedback({
+            text:
+              language === 'hi'
+                ? `Gemini AI सटीक विकल्प खोज रहा है... ("${rawTranscript}")`
+                : `Matching precise option via Gemini AI... ("${rawTranscript}")`,
+            type: 'info',
+          });
 
-          // Rapid Gemini Matcher
           try {
             const matchResult = await matchVoiceToOptions(
               rawTranscript,
@@ -351,12 +358,17 @@ export const Step4Interview: React.FC = () => {
             if (activeQuestionIdRef.current !== targetQuestionId) return;
             setIsMatchingVoice(false);
 
-            if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
+            if (
+              matchResult.matchedIds &&
+              matchResult.matchedIds.length > 0 &&
+              !matchResult.matchedIds.includes('none')
+            ) {
               const matchedOptions = currentQuestion.options.filter((opt) =>
                 matchResult.matchedIds.includes(opt.id)
               );
 
               if (matchedOptions.length > 0) {
+                setCustomFreeText('');
                 if (currentQuestion.input_type === 'multi_select') {
                   setSelectedOptionIds((prev) => {
                     const newIds = matchedOptions.map((o) => o.id);
@@ -382,29 +394,38 @@ export const Step4Interview: React.FC = () => {
                 });
 
                 speechService.playChime('success');
-              } else if (!instantMatchedOption) {
-                setVoiceFeedback({
-                  text:
-                    language === 'hi'
-                      ? `स्पष्ट उत्तर नहीं मिला। कृपया नीचे से विकल्प चुनें।`
-                      : `No exact option matched. Please tap an option below.`,
-                  type: 'warning',
-                });
+                return;
               }
-            } else if (!instantMatchedOption) {
-              setVoiceFeedback({
-                text:
-                  language === 'hi'
-                    ? `कोई मिलान नहीं मिला ("none")। कृपया नीचे से विकल्प चुनें।`
-                    : `No matching option found. Please tap an option below.`,
-                type: 'warning',
-              });
             }
+
+            // Fallback for spoken unlisted symptoms: transcribe into the fallback box
+            setCustomFreeText(rawTranscript);
+            setCurrentSelected(undefined);
+            setSelectedOptionIds([]);
+            setVoiceFeedback({
+              text:
+                language === 'hi'
+                  ? `आपकी बात नीचे दर्ज कर ली गई है: "${rawTranscript}"`
+                  : `Transcribed into text below: "${rawTranscript}"`,
+              type: 'success',
+            });
+            speechService.playChime('success');
           } catch (err) {
             if (activeQuestionIdRef.current === targetQuestionId) {
               setIsMatchingVoice(false);
             }
             console.error('Error during voice option matching:', err);
+            // On error, also safely populate free-text fallback
+            setCustomFreeText(rawTranscript);
+            setCurrentSelected(undefined);
+            setSelectedOptionIds([]);
+            setVoiceFeedback({
+              text:
+                language === 'hi'
+                  ? `आपकी बात नीचे दर्ज कर ली गई है: "${rawTranscript}"`
+                  : `Transcribed into text below: "${rawTranscript}"`,
+              type: 'success',
+            });
           }
         };
 
@@ -424,7 +445,7 @@ export const Step4Interview: React.FC = () => {
         setIsListening(false);
       }
     } else {
-      // Fallback simulation if SpeechRecognition unsupported
+      // Fallback simulation if SpeechRecognition unsupported in browser
       const targetQuestionId = currentQuestion.id;
       setIsListening(true);
       setTimeout(async () => {
@@ -448,6 +469,7 @@ export const Step4Interview: React.FC = () => {
           if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
             const found = currentQuestion.options.find((o) => o.id === matchResult.matchedIds[0]);
             if (found) {
+              setCustomFreeText('');
               handleSelectOption(found);
               setVoiceFeedback({
                 text: language === 'hi' ? `चयनित: ${found.text_hi}` : `Selected: ${found.text_en}`,
@@ -491,13 +513,13 @@ export const Step4Interview: React.FC = () => {
     let isOptionRedFlag = false;
     let optionRedFlagReason: string | undefined = undefined;
 
-    if (currentQuestion.input_type === 'free_text') {
-      if (!customFreeText.trim()) return;
+    // Check if free text was entered and is the active choice (or last action)
+    if (customFreeText.trim().length > 0) {
       textEn = customFreeText.trim();
       textHi = customFreeText.trim();
     } else if (currentQuestion.input_type === 'multi_select') {
       if (selectedOptionIds.length === 0) return;
-      const chosenOptions = currentQuestion.options.filter((o) =>
+      const chosenOptions = (currentQuestion.options || []).filter((o) =>
         selectedOptionIds.includes(o.id)
       );
       if (chosenOptions.length === 0) return;
@@ -509,7 +531,7 @@ export const Step4Interview: React.FC = () => {
         optionRedFlagReason = rfOption.red_flag_reason;
       }
     } else {
-      const chosen = currentQuestion.options.find((o) => o.id === currentSelected);
+      const chosen = (currentQuestion.options || []).find((o) => o.id === currentSelected);
       if (!chosen) return;
       textEn = chosen.text_en;
       textHi = chosen.text_hi;
@@ -869,8 +891,9 @@ export const Step4Interview: React.FC = () => {
           )}
 
           {/* Options Grid: repeat(auto-fit, minmax(220px, 1fr)) */}
-          {!isLoadingTurn && currentQuestion.input_type !== 'free_text' ? (
+          {!isLoadingTurn && currentQuestion.options && currentQuestion.options.length > 0 && (
             <div
+              id="interview-options-grid"
               className="grid gap-3.5 sm:gap-4 w-full"
               style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}
             >
@@ -889,27 +912,50 @@ export const Step4Interview: React.FC = () => {
                 />
               ))}
             </div>
-          ) : !isLoadingTurn ? (
-            <div className="space-y-3 bg-white p-5 rounded-2xl border-2 border-slate-200 shadow-xs">
-              <label className="block text-base font-bold text-slate-800">
-                {language === 'hi'
-                  ? 'अपना उत्तर यहां लिखें या बोलें:'
-                  : 'Enter or speak your response:'}
-              </label>
+          )}
+
+          {/* Integrated Free-Text & Voice Fallback Input Box */}
+          {!isLoadingTurn && (
+            <div
+              id="interview-freetext-fallback-card"
+              className="space-y-3 bg-white p-4 sm:p-5 rounded-2xl border-2 border-slate-200 shadow-xs text-left"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                <label
+                  htmlFor="input-question-free-text"
+                  className="block text-sm sm:text-base font-bold text-slate-800"
+                >
+                  {language === 'hi'
+                    ? 'अन्य कोई तकलीफ / अपने शब्दों में लिखें या बोलें:'
+                    : 'Enter or speak your response (Fallback for anything not listed):'}
+                </label>
+                <span className="text-xs text-slate-500 font-medium">
+                  {language === 'hi'
+                    ? 'सूची में न होने पर यहां लिखें या माइक का प्रयोग करें'
+                    : 'Type here or use "Speak Answer" if unlisted'}
+                </span>
+              </div>
               <textarea
                 id="input-question-free-text"
-                rows={4}
+                rows={3}
                 value={customFreeText}
-                onChange={(e) => setCustomFreeText(e.target.value)}
+                onChange={(e) => {
+                  setCustomFreeText(e.target.value);
+                  // "Last action wins": typing custom free text deselects options
+                  if (e.target.value.trim().length > 0) {
+                    setCurrentSelected(undefined);
+                    setSelectedOptionIds([]);
+                  }
+                }}
                 placeholder={
                   language === 'hi'
-                    ? 'अपनी तकलीफ का विस्तार से वर्णन करें...'
-                    : 'Describe your symptoms in your own words...'
+                    ? 'अपनी तकलीफ का विस्तार से वर्णन करें (उदा. 3 दिन से चक्कर आना, कान में दर्द, आदि)...'
+                    : 'Describe your symptoms in your own words (e.g. severe ear pain, dizziness for 3 days, etc.)...'
                 }
-                className="w-full p-4 rounded-xl border-2 border-slate-300 focus:border-[#102A43] focus:ring-4 focus:ring-slate-100 text-base sm:text-lg font-medium text-slate-900"
+                className="w-full p-3.5 sm:p-4 rounded-xl border-2 border-slate-300 focus:border-[#102A43] focus:ring-4 focus:ring-slate-100 text-sm sm:text-base font-medium text-slate-900 placeholder:text-slate-400"
               />
             </div>
-          ) : null}
+          )}
         </section>
 
         {/* Aside / Doctor's Real-Time Summary Sidebar (Relative ~28-30% Width) */}

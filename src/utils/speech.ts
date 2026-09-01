@@ -162,7 +162,7 @@ class SpeechService {
       utterance.voice = matchedVoice;
     }
     utterance.lang = targetLang;
-    utterance.rate = 0.92;
+    utterance.rate = lang === 'en' ? 1.08 : 0.95;
     utterance.pitch = 1.05;
 
     utterance.onstart = () => {
@@ -207,7 +207,7 @@ class SpeechService {
     // 1. In-memory Cache Hit: Play directly
     if (this.bufferCache.has(cacheKey)) {
       const audioBuffer = this.bufferCache.get(cacheKey)!;
-      this.playAudioBuffer(audioBuffer, onStart, onEnd);
+      this.playAudioBuffer(audioBuffer, onStart, onEnd, lang);
       return;
     }
 
@@ -217,7 +217,7 @@ class SpeechService {
       if (cachedBase64) {
         const audioBuffer = await this.decodeAudio(cachedBase64);
         this.bufferCache.set(cacheKey, audioBuffer);
-        this.playAudioBuffer(audioBuffer, onStart, onEnd);
+        this.playAudioBuffer(audioBuffer, onStart, onEnd, lang);
         return;
       }
     } catch {
@@ -271,7 +271,7 @@ class SpeechService {
         // LocalStorage quota may be full, memory cache still holds it
       }
 
-      this.playAudioBuffer(audioBuffer, onStart, onEnd);
+      this.playAudioBuffer(audioBuffer, onStart, onEnd, lang);
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
         // Request was interrupted by next user prompt
@@ -285,12 +285,18 @@ class SpeechService {
   private playAudioBuffer(
     buffer: AudioBuffer,
     onStart?: () => void,
-    onEnd?: () => void
+    onEnd?: () => void,
+    lang: AppLanguage = 'hi'
   ) {
     try {
       const ctx = this.getAudioContext();
       const source = ctx.createBufferSource();
       source.buffer = buffer;
+      if (lang === 'en') {
+        source.playbackRate.value = 1.08;
+      } else {
+        source.playbackRate.value = 1.0;
+      }
       source.connect(ctx.destination);
 
       this.currentSource = source;

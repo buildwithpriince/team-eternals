@@ -156,7 +156,7 @@ export const VoicePrompter: React.FC<VoicePrompterProps> = ({
           {isListening ? (
             <>
               <Mic className="w-5 h-5 animate-bounce" />
-              <span>{language === 'hi' ? 'सुन रहा हूँ...' : 'Listening...'}</span>
+              <span>{language === 'hi' ? 'सुन रही हूँ...' : 'Listening...'}</span>
             </>
           ) : (
             <>

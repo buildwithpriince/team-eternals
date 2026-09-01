@@ -13,7 +13,7 @@ export const Step1Greeting: React.FC = () => {
   } = useApp();
 
   const greetingTextHi =
-    'नमस्ते! मैं स्वास्थ्य ए.आई. हूँ। डॉक्टर साहब से मिलने से पहले, मैं आपकी बीमारी के बारे में कुछ जरूरी बातें लिखूंगा, ताकि डॉक्टर आपका सही व त्वरित इलाज कर सकें।';
+    'नमस्ते! मैं स्वास्थ्य ए.आई. हूँ। डॉक्टर साहब से मिलने से पहले, मैं आपकी बीमारी के बारे में कुछ जरूरी बातें लिखूंगी, ताकि डॉक्टर आपका सही व त्वरित इलाज कर सकें।';
   const greetingTextEn =
     'Namaste! I am Swasthya AI. Before you meet the doctor, I will record your health history and symptoms so the physician can provide faster, accurate care.';
 

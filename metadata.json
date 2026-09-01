@@ -1,0 +1,6 @@
+{
+  "name": "Swasthya AI",
+  "description": "Bilingual AI-powered clinical history-taking kiosk and physician clinical dashboard for Indian hospital OPDs with General & AYUSH modes.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,299 @@
+import { BackendQuestionContract } from '../types';
+
+export const generalClinicalQuestions: BackendQuestionContract[] = [
+  // SECTION 1: CHIEF COMPLAINT
+  {
+    id: 'q1_chief_complaint',
+    question_en: 'What is the main reason for your hospital visit today?',
+    question_hi: 'आज अस्पताल आने का आपका मुख्य कारण क्या है?',
+    input_type: 'single_select',
+    section: 'chief_complaint',
+    symptom_tags: ['primary_concern'],
+    section_complete: false,
+    interview_complete: false,
+    audio_prompt_en: 'Please select what troubles you the most today.',
+    audio_prompt_hi: 'कृपया बताएं कि आज आपको सबसे ज्यादा क्या तकलीफ है?',
+    clinical_rationale: 'Primary triage sorting into acute vs chronic pathways',
+    options: [
+      { id: 'fever', text_en: 'Fever & Body Shivers', text_hi: 'बुखार एवं शरीर में कंपकंपी' },
+      { id: 'chest_pain', text_en: 'Chest Pain or Discomfort (Severe)', text_hi: 'सीने में दर्द या भारीपन (गंभीर)', red_flag: true, red_flag_reason: 'Potential Acute Coronary Syndrome / Angina' },
+      { id: 'cough_breath', text_en: 'Cough or Difficulty in Breathing', text_hi: 'खांसी या सांस लेने में तकलीफ' },
+      { id: 'stomach_pain', text_en: 'Stomach Ache, Acidity or Vomiting', text_hi: 'पेट दर्द, गैस या उल्टी' },
+      { id: 'joint_body_pain', text_en: 'Joint Pain, Backache or Body Weakness', text_hi: 'जोड़ों का दर्द, कमर दर्द या कमजोरी' },
+      { id: 'headache_dizzy', text_en: 'Severe Headache, Dizziness or Fainting', text_hi: 'सिरदर्द, चक्कर आना या बेहोशी' },
+      { id: 'routine_checkup', text_en: 'Regular Check-up / Diabetes & BP Follow-up', text_hi: 'नियमित जांच / शुगर व बीपी की जांच' },
+    ],
+  },
+  {
+    id: 'q2_duration',
+    question_en: 'How long have you been experiencing this main symptom?',
+    question_hi: 'यह तकलीफ आपको कितने दिनों या समय से हो रही है?',
+    input_type: 'single_select',
+    section: 'chief_complaint',
+    symptom_tags: ['chronicity', 'timeline'],
+    section_complete: true,
+    interview_complete: false,
+    audio_prompt_en: 'How many days has it been?',
+    audio_prompt_hi: 'यह समस्या कितने दिनों से है?',
+    options: [
+      { id: 'dur_today', text_en: 'Started suddenly today (< 24 hours)', text_hi: 'आज अचानक शुरू हुआ (24 घंटे से कम)' },
+      { id: 'dur_few_days', text_en: '2 to 7 days (Past week)', text_hi: '2 से 7 दिन (पिछले एक हफ्ते से)' },
+      { id: 'dur_weeks', text_en: '1 to 4 weeks (About a month)', text_hi: '1 से 4 हफ्ते (लगभग एक महीने से)' },
+      { id: 'dur_chronic', text_en: 'More than 1 to 3 months (Long term)', text_hi: '1 से 3 महीने या उससे अधिक समय से' },
+    ],
+  },
+
+  // SECTION 2: HPI (History of Present Illness)
+  {
+    id: 'q3_severity_and_nature',
+    question_en: 'How severe is the discomfort, and how does it feel?',
+    question_hi: 'तकलीफ कितनी तेज है, और कैसा महसूस होता है?',
+    input_type: 'single_select',
+    section: 'hpi',
+    symptom_tags: ['severity_scale', 'quality'],
+    section_complete: false,
+    interview_complete: false,
+    audio_prompt_en: 'Is the pain mild, moderate, or unbearable?',
+    audio_prompt_hi: 'क्या दर्द हल्का है, मध्यम है या असहनीय है?',
+    options: [
+      { id: 'sev_mild', text_en: 'Mild — Manageable with daily work', text_hi: 'हल्की — रोजमर्रा का काम कर पा रहे हैं' },
+      { id: 'sev_moderate', text_en: 'Moderate — Painful, disturbing sleep and routine', text_hi: 'मध्यम — नींद व काम में बाधा आ रही है' },
+      { id: 'sev_unbearable', text_en: 'Severe / Unbearable — Unable to move or rest', text_hi: 'बहुत तेज / असहनीय — सहन करना मुश्किल है', red_flag: true, red_flag_reason: 'Pain Scale 9-10/10 requires immediate analgesic triage' },
+      { id: 'sev_intermittent', text_en: 'Comes and goes in sudden waves', text_hi: 'रुक-रुक कर लहरों की तरह आता है' },
+    ],
+  },
+  {
+    id: 'q4_red_flag_screener',
+    question_en: 'Do you currently experience any of these critical warning signs?',
+    question_hi: 'क्या आपको इनमें से कोई भी गंभीर लक्षण महसूस हो रहा है?',
+    input_type: 'single_select',
+    section: 'hpi',
+    symptom_tags: ['critical_warning_signs'],
+    section_complete: true,
+    interview_complete: false,
+    audio_prompt_en: 'Please review these warning signs carefully.',
+    audio_prompt_hi: 'कृपया इन गंभीर लक्षणों को ध्यान से देखें।',
+    options: [
+      { id: 'rf_none', text_en: 'None of these warning signs apply to me', text_hi: 'मुझे इनमें से कोई गंभीर लक्षण नहीं है' },
+      { id: 'rf_chest_arm', text_en: 'Crushing chest pain radiating to left arm/jaw', text_hi: 'सीने में जकड़न जो बाएं हाथ या जबड़े तक फैल रही है', red_flag: true, red_flag_reason: 'Suspected Acute Myocardial Infarction' },
+      { id: 'rf_breath_rest', text_en: 'Severe breathlessness even while sitting still', text_hi: 'बैठे रहने पर भी सांस फूलना या दम घुटना', red_flag: true, red_flag_reason: 'Acute respiratory distress / Low SpO2 warning' },
+      { id: 'rf_speech_weak', text_en: 'Sudden weakness on one side of face or body / Slurred speech', text_hi: 'चेहरे या हाथ-पैर में अचानक कमजोरी / बोली लड़खड़ाना', red_flag: true, red_flag_reason: 'Suspected Acute Stroke / TIA' },
+      { id: 'rf_blood_vomit', text_en: 'Coughing up blood or blood in stool/vomit', text_hi: 'खांसी में खून या उल्टी/मल में खून आना', red_flag: true, red_flag_reason: 'Active Upper/Lower GI bleeding or Hemoptysis' },
+    ],
+  },
+
+  // SECTION 3: PAST MEDICAL HISTORY
+  {
+    id: 'q5_past_history',
+    question_en: 'Do you have any existing long-term medical conditions?',
+    question_hi: 'क्या आपको पहले से कोई पुरानी बीमारी या समस्या है?',
+    input_type: 'single_select',
+    section: 'past_history',
+    symptom_tags: ['comorbidities'],
+    section_complete: false,
+    interview_complete: false,
+    audio_prompt_en: 'Select any known conditions like Diabetes or Blood Pressure.',
+    audio_prompt_hi: 'यदि आपको शुगर, बीपी या कोई अन्य बीमारी है तो बताएं।',
+    options: [
+      { id: 'pmh_none', text_en: 'No known chronic medical history', text_hi: 'कोई पुरानी बीमारी नहीं है' },
+      { id: 'pmh_diabetes_bp', text_en: 'High Blood Pressure (Hypertension) or Diabetes', text_hi: 'हाई ब्लड प्रेशर या शुगर (मधुमेह)' },
+      { id: 'pmh_heart', text_en: 'Heart disease / Prior heart stent or bypass', text_hi: 'हृदय रोग / पूर्व में स्टेंट या बाईपास' },
+      { id: 'pmh_asthma_tb', text_en: 'Asthma / Respiratory condition / Past TB', text_hi: 'अस्थमा / दमा / पूर्व में टीबी' },
+      { id: 'pmh_thyroid_kidney', text_en: 'Thyroid disorder or Kidney condition', text_hi: 'थायराइड या गुर्दे (किडनी) की बीमारी' },
+    ],
+  },
+  {
+    id: 'q6_prior_surgeries',
+    question_en: 'Have you had any major surgeries or hospital admissions in the past 2 years?',
+    question_hi: 'क्या पिछले 2 वर्षों में आपका कोई ऑपरेशन हुआ है या अस्पताल में भर्ती हुए हैं?',
+    input_type: 'single_select',
+    section: 'past_history',
+    symptom_tags: ['surgical_history'],
+    section_complete: true,
+    interview_complete: false,
+    options: [
+      { id: 'surg_no', text_en: 'No surgeries or hospitalizations', text_hi: 'नहीं, कोई ऑपरेशन नहीं हुआ' },
+      { id: 'surg_recent', text_en: 'Yes, had surgery within the past 6 months', text_hi: 'हां, पिछले 6 महीनों के भीतर ऑपरेशन हुआ' },
+      { id: 'surg_older', text_en: 'Yes, surgery over 1–2 years ago', text_hi: 'हां, 1 से 2 साल पहले ऑपरेशन हुआ था' },
+    ],
+  },
+
+  // SECTION 4: DRUG & ALLERGIES
+  {
+    id: 'q7_drug_allergies',
+    question_en: 'Are you allergic to any medicines (e.g., Penicillin, Sulfa, Painkillers)?',
+    question_hi: 'क्या आपको किसी दवा से एलर्जी या रिएक्शन होता है (जैसे पेनिसिलिन, दर्द निवारक)?',
+    input_type: 'single_select',
+    section: 'drug_allergy',
+    symptom_tags: ['allergies'],
+    section_complete: true,
+    interview_complete: false,
+    audio_prompt_en: 'Do you have any medicine allergies?',
+    audio_prompt_hi: 'क्या किसी दवा से खुजली या एलर्जी होती है?',
+    options: [
+      { id: 'alg_none', text_en: 'No known medicine allergies (NKDA)', text_hi: 'किसी दवा से कोई एलर्जी नहीं है' },
+      { id: 'alg_penicillin', text_en: 'Allergic to Penicillin / Amoxicillin', text_hi: 'पेनिसिलिन / एमोक्सिसिलिन से एलर्जी है' },
+      { id: 'alg_painkillers', text_en: 'Allergic to Painkillers (NSAIDs / Paracetamol / Brufen)', text_hi: 'दर्द निवारक दवाओं (जैसे ब्रूफेन आदि) से एलर्जी' },
+      { id: 'alg_other', text_en: 'Allergic to sulfa drugs or specific injections', text_hi: 'सल्फा दवा या किसी खास इंजेक्शन से एलर्जी' },
+    ],
+  },
+
+  // SECTION 5: PERSONAL & FAMILY HISTORY
+  {
+    id: 'q8_habits_and_family',
+    question_en: 'Do you smoke, chew tobacco, or have a family history of early heart disease or diabetes?',
+    question_hi: 'क्या आप बीड़ी/सिगरेट/तंबाकू लेते हैं, या परिवार में किसी को दिल की बीमारी/शुगर है?',
+    input_type: 'single_select',
+    section: 'personal_history',
+    symptom_tags: ['lifestyle_habits', 'family_history'],
+    section_complete: true,
+    interview_complete: false,
+    options: [
+      { id: 'hab_none', text_en: 'No tobacco/alcohol, no known early family illness', text_hi: 'कोई नशा नहीं, परिवार में कोई गंभीर बीमारी नहीं' },
+      { id: 'hab_tobacco', text_en: 'Chew tobacco / Bidi / Cigarette smoker', text_hi: 'तंबाकू / गुटखा / बीड़ी या सिगरेट का सेवन' },
+      { id: 'fam_heart_diabetes', text_en: 'Strong family history of Diabetes or Heart attacks', text_hi: 'परिवार में माता/पिता को शुगर या हार्ट अटैक का इतिहास' },
+      { id: 'hab_both', text_en: 'Both tobacco use and family history of chronic illness', text_hi: 'तंबाकू का सेवन और परिवार में बीमारी का इतिहास दोनों' },
+    ],
+  },
+
+  // SECTION 6: REVIEW OF SYSTEMS (ROS)
+  {
+    id: 'q9_ros_associated_symptoms',
+    question_en: 'Are you experiencing any other associated symptoms right now?',
+    question_hi: 'क्या आपको अभी इनमें से कोई अन्य परेशानी भी हो रही है?',
+    input_type: 'single_select',
+    section: 'ros',
+    symptom_tags: ['systemic_review'],
+    section_complete: true,
+    interview_complete: true,
+    audio_prompt_en: 'Any fever, loss of appetite, or swelling in feet?',
+    audio_prompt_hi: 'क्या भूख कम लगना, चक्कर या पैरों में सूजन जैसी कोई और बात है?',
+    options: [
+      { id: 'ros_none', text_en: 'No other symptoms, feeling normal otherwise', text_hi: 'अन्य कोई परेशानी नहीं है, बाकी सब सामान्य है' },
+      { id: 'ros_appetite_weight', text_en: 'Severe loss of appetite / unexplained weight loss', text_hi: 'भूख बिल्कुल न लगना / तेजी से वजन कम होना' },
+      { id: 'ros_pedal_edema', text_en: 'Swelling in feet, ankles or face', text_hi: 'पैरों या टखनों में सूजन (सूज जाना)' },
+      { id: 'ros_urinary_burning', text_en: 'Burning during urination or frequent night urination', text_hi: 'पेशाब में जलन या रात में बार-बार पेशाब आना' },
+      { id: 'ros_sleep_anxiety', text_en: 'Extreme sleep disturbance, anxiety or palpitation', text_hi: 'नींद न आना, अत्यधिक घबराहट या धड़कन बढ़ना' },
+    ],
+  },
+];
+
+export const ayushClinicalQuestions: BackendQuestionContract[] = [
+  // SECTION 1: CHIEF COMPLAINT (MUKHYA LAKSHANA)
+  {
+    id: 'ay_q1_chief_complaint',
+    question_en: 'What is your primary health concern (Mukhya Lakshana)?',
+    question_hi: 'आज आपकी मुख्य स्वास्थ्य समस्या (मुख्य लक्षण) क्या है?',
+    input_type: 'single_select',
+    section: 'chief_complaint',
+    symptom_tags: ['ayush_primary_dosha_inquiry'],
+    section_complete: false,
+    interview_complete: false,
+    ayush_only: true,
+    audio_prompt_en: 'Please select your main health concern for Ayurvedic consultation.',
+    audio_prompt_hi: 'कृपया बताएं कि आयुर्वेद परामर्श के लिए आपकी मुख्य समस्या क्या है?',
+    options: [
+      { id: 'ay_vata_joint', text_en: 'Vata issue: Joint pain, Sciatica, Stiffness (Sandhivata / Amavata)', text_hi: 'वात विकार: जोड़ों का दर्द, गठिया, जकड़न (संधिवात/आमवात)' },
+      { id: 'ay_pitta_digest', text_en: 'Pitta issue: Hyperacidity, Burning sensation, Skin rashes (Amlapitta)', text_hi: 'पित्त विकार: अम्लपित्त (एसिडिटी), जलन, त्वचा पर दाने' },
+      { id: 'ay_kapha_resp', text_en: 'Kapha issue: Chronic phlegm, Sinusitis, Heaviness, Asthma (Kasa/Shwasa)', text_hi: 'कफ विकार: पुराना बलगम, साइनस, भारीपन, दमा (श्वास)' },
+      { id: 'ay_metabolic_prameha', text_en: 'Metabolic: Diabetes / Blood sugar imbalance, Obesity (Prameha/Medoroga)', text_hi: 'चयापचय: प्रमेह (मधुमेह), मोटापा, सुस्ती' },
+      { id: 'ay_stress_manasa', text_en: 'Manasa: Insomnia, Stress, Nervous exhaustion (Anidra/Chittodvega)', text_hi: 'मानसिक: अनिद्रा, अत्यधिक तनाव, घबराहट' },
+      { id: 'ay_severe_chest', text_en: 'Severe acute crushing chest pain (Hridshoola emergency)', text_hi: 'सीने में अत्यधिक तीव्र दर्द एवं घबराहट (हृद्शूल)', red_flag: true, red_flag_reason: 'Hridshoola / Cardiac Emergency requiring urgent Allopathic/Cardio triage' },
+    ],
+  },
+
+  // SECTION 2: AHARA & JATHARAGNI (DIGESTIVE FIRE & APPETITE)
+  {
+    id: 'ay_q2_jatharagni',
+    question_en: 'How is your Digestive Fire (Jatharagni / Appetite & Digestion)?',
+    question_hi: 'आपकी जठराग्नि (पाचन शक्ति व भूख) की क्या स्थिति है?',
+    input_type: 'single_select',
+    section: 'ahara_vihara',
+    symptom_tags: ['jatharagni_assessment'],
+    section_complete: false,
+    interview_complete: false,
+    ayush_only: true,
+    audio_prompt_en: 'How is your digestion and appetite?',
+    audio_prompt_hi: 'आपकी भूख और पाचन क्रिया कैसी है?',
+    options: [
+      { id: 'agni_sama', text_en: 'Samagni (Balanced): Healthy appetite, digest food timely without gas', text_hi: 'समाग्नि (संतुलित): समय पर भूख लगती है, बिना गैस ठीक पचता है' },
+      { id: 'agni_manda', text_en: 'Mandagni (Sluggish): Poor appetite, heaviness after meals, white tongue coating', text_hi: 'मंदाग्नि (धीमी): भूख कम, खाने के बाद भारीपन, जीभ पर मैल' },
+      { id: 'agni_tikshna', text_en: 'Tikshnagni (Excessive/Sharp): Constant intense hunger, burning, sour burps', text_hi: 'तीक्ष्णाग्नि (अत्यधिक तेज): बार-बार तेज भूख, खट्टी डकारें, सीने में जलन' },
+      { id: 'agni_visham', text_en: 'Vishamagni (Irregular): Sometimes hungry, sometimes no appetite, severe bloating', text_hi: 'विषमाग्नि (अनियमित): कभी ज्यादा कभी बिल्कुल नहीं, पेट फूलना' },
+    ],
+  },
+
+  // SECTION 3: KOSTHA & BOWEL HABITS (MALAPRAVRITTI)
+  {
+    id: 'ay_q3_kostha',
+    question_en: 'What is the nature of your bowel movements (Kostha Pariksha)?',
+    question_hi: 'आपकी पेट साफ होने की प्रक्रिया (कोष्ठ परीक्षा) कैसी है?',
+    input_type: 'single_select',
+    section: 'dashavidha_pariksha',
+    symptom_tags: ['kostha_bowel'],
+    section_complete: true,
+    interview_complete: false,
+    ayush_only: true,
+    options: [
+      { id: 'kostha_krura', text_en: 'Krura Kostha (Hard/Vata): Dry stools, hard constipation, straining', text_hi: 'क्रूर कोष्ठ: कब्ज, सूखा मल, शौच में जोर लगाना पड़ता है' },
+      { id: 'kostha_mridu', text_en: 'Mridu Kostha (Soft/Pitta): Loose motions easily with milk/fruits, burning', text_hi: 'मृदु कोष्ठ: थोड़ा सा दूध या फल लेने पर भी पतला दस्त' },
+      { id: 'kostha_madhyama', text_en: 'Madhyama Kostha: Clean regular bowel once daily in the morning', text_hi: 'मध्यम कोष्ठ: रोज सुबह एक बार सामान्य रूप से साफ होना' },
+    ],
+  },
+
+  // SECTION 4: PRAKRITI & SENSITIVITY TO WEATHER (DESHA / SATMYA)
+  {
+    id: 'ay_q4_dosha_climate',
+    question_en: 'Which weather or food aggravates your body the most (Prakriti indicator)?',
+    question_hi: 'कौन सा मौसम या खान-पान आपके शरीर को सबसे अधिक प्रतिकूल लगता है?',
+    input_type: 'single_select',
+    section: 'dashavidha_pariksha',
+    symptom_tags: ['prakriti_indicators'],
+    section_complete: true,
+    interview_complete: false,
+    ayush_only: true,
+    options: [
+      { id: 'prak_vata', text_en: 'Cold, dry windy weather makes joints stiff & mind restless (Vata-dominant)', text_hi: 'ठंडी व शुष्क हवा से जोड़ों में दर्द व त्वचा में रूखापन (वात प्रधान)' },
+      { id: 'prak_pitta', text_en: 'Hot sunny weather, spicy sour oily food causes anger/sweating/burn (Pitta-dominant)', text_hi: 'गर्मी, धूप व तीखे-मसालेदार खाने से जलन व पसीना (पित्त प्रधान)' },
+      { id: 'prak_kapha', text_en: 'Rainy cold damp weather causes lethargy, weight gain, sinus blockage (Kapha-dominant)', text_hi: 'बरसात व नमी वाले मौसम में भारीपन, सुस्ती व कफ (कफ प्रधान)' },
+      { id: 'prak_dvandva', text_en: 'Mixed reactions depending on seasons', text_hi: 'मिश्रित लक्षण (ऋतु के अनुसार बदलाव)' },
+    ],
+  },
+
+  // SECTION 5: NIDRA & MANASA BHAVA (SLEEP & MENTAL VIGOR)
+  {
+    id: 'ay_q5_sleep_stress',
+    question_en: 'How is your sleep quality and daily energy (Nidra & Bala)?',
+    question_hi: 'आपकी नींद और दिनभर की ऊर्जा (निद्रा एवं बल) कैसी रहती है?',
+    input_type: 'single_select',
+    section: 'personal_history',
+    symptom_tags: ['nidra_bala'],
+    section_complete: true,
+    interview_complete: false,
+    ayush_only: true,
+    options: [
+      { id: 'nidra_good', text_en: 'Deep restful sleep 6–8 hours, awake refreshed', text_hi: 'गहरी अच्छी नींद 6–8 घंटे, सुबह तरोताजा उठते हैं' },
+      { id: 'nidra_broken_anidra', text_en: 'Broken restless sleep, wake up at 2–3 AM, anxious racing thoughts', text_hi: 'टूटी-फूटी नींद, रात में बार-बार आंख खुलना, बेचैनी' },
+      { id: 'nidra_ati_tandra', text_en: 'Excessive sleepiness, lethargy, feeling heavy all day (Atinidra/Tandra)', text_hi: 'दिनभर आलस्य व भारीपन, ज्यादा सोने का मन करना' },
+    ],
+  },
+
+  // SECTION 6: AYURVEDIC ALLERGIES & CURRENT OUSHADHA
+  {
+    id: 'ay_q6_current_herb_allopathy',
+    question_en: 'Are you currently taking any Allopathic, Ayurvedic, or Homeopathic medicines?',
+    question_hi: 'क्या आप वर्तमान में कोई एलोपैथिक, आयुर्वेदिक या अन्य दवाइयां ले रहे हैं?',
+    input_type: 'single_select',
+    section: 'drug_allergy',
+    symptom_tags: ['oushadha_history'],
+    section_complete: true,
+    interview_complete: true,
+    ayush_only: true,
+    options: [
+      { id: 'oushadha_none', text_en: 'Not taking any continuous medications', text_hi: 'कोई नियमित दवा नहीं ले रहे हैं' },
+      { id: 'oushadha_allopathy_bp_sugar', text_en: 'Taking Allopathic medications for BP / Diabetes / Thyroid', text_hi: 'बीपी, शुगर या थायराइड की अंग्रेजी दवाइयां चल रही हैं' },
+      { id: 'oushadha_ayur_herbal', text_en: 'Taking Ayurvedic Kashayam / Asava / Churna or Bhasma', text_hi: 'आयुर्वेदिक काढ़ा, चूर्ण, क्वाथ या भस्म ले रहे हैं' },
+      { id: 'oushadha_both', text_en: 'Taking both modern and traditional formulations simultaneously', text_hi: 'एलोपैथिक और आयुर्वेदिक दोनों दवाएं साथ में ले रहे हैं' },
+    ],
+  },
+];

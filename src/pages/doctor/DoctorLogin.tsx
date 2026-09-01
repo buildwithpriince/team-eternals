@@ -1,0 +1,154 @@
+import React, { useState } from 'react';
+import { Stethoscope, Lock, User, KeyRound, ArrowRight, Sparkles, ShieldCheck } from 'lucide-react';
+import { mockDoctors } from '../../data/mockData';
+import { DoctorUser } from '../../types';
+import { useApp } from '../../context/AppContext';
+
+interface DoctorLoginProps {
+  onLoginSuccess: (doctor: DoctorUser) => void;
+}
+
+export const DoctorLogin: React.FC<DoctorLoginProps> = ({ onLoginSuccess }) => {
+  const { setDepartment } = useApp();
+  const [selectedDoctor, setSelectedDoctor] = useState<DoctorUser>(mockDoctors[0]);
+  const [staffId, setStaffId] = useState<string>('DOC-DEL-104');
+  const [password, setPassword] = useState<string>('••••••••');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  const handleSelectPreset = (doc: DoctorUser) => {
+    setSelectedDoctor(doc);
+    setDepartment(doc.department);
+    setStaffId(doc.department === 'ayush' ? 'AYU-NAT-202' : 'DOC-DEL-104');
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setTimeout(() => {
+      setIsLoading(false);
+      setDepartment(selectedDoctor.department);
+      onLoginSuccess(selectedDoctor);
+    }, 400);
+  };
+
+  return (
+    <div
+      id="doctor-login-screen"
+      className="w-full max-w-xl mx-auto py-8 px-4 space-y-6 animate-fadeIn text-left"
+    >
+      {/* Header */}
+      <div className="text-center space-y-2">
+        <div className="w-16 h-16 rounded-2xl bg-[#0E4A5C] text-white flex items-center justify-center mx-auto shadow-md">
+          <Stethoscope className="w-9 h-9" />
+        </div>
+        <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900">
+          Doctor Clinical Portal
+        </h2>
+        <p className="text-sm text-slate-600 font-medium">
+          Authorized Hospital Physician & EMR Access
+        </p>
+      </div>
+
+      {/* Preset Doctor Account Picker */}
+      <div className="p-4 bg-slate-100 rounded-2xl space-y-3 border border-slate-300">
+        <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-700">
+          <Sparkles className="w-4 h-4 text-amber-600" />
+          <span>Select Physician Profile (1-Click Demo Presets)</span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {mockDoctors.map((doc) => (
+            <button
+              key={doc.id}
+              id={`preset-login-${doc.id}`}
+              type="button"
+              onClick={() => handleSelectPreset(doc)}
+              className={`p-3.5 rounded-xl border-2 text-left flex items-center gap-3 transition-all cursor-pointer ${
+                selectedDoctor.id === doc.id
+                  ? 'bg-white border-[#0E4A5C] shadow-md ring-2 ring-[#0E4A5C]/30'
+                  : 'bg-slate-50 border-slate-200 hover:bg-white'
+              }`}
+            >
+              <img
+                src={doc.avatarUrl}
+                alt={doc.name}
+                className="w-12 h-12 rounded-xl object-cover border border-slate-300"
+                referrerPolicy="no-referrer"
+              />
+              <div className="flex-1 min-w-0">
+                <span className="text-xs font-bold text-slate-900 block truncate">
+                  {doc.name}
+                </span>
+                <span className="text-[11px] text-slate-500 block truncate">
+                  {doc.specialization}
+                </span>
+                <span className="text-[10px] font-black uppercase text-cyan-800">
+                  {doc.roomNumber}
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Login Form */}
+      <form
+        onSubmit={handleSubmit}
+        className="p-6 sm:p-8 bg-white rounded-2xl border-2 border-slate-300 shadow-md space-y-4"
+      >
+        <div className="space-y-1.5">
+          <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+            <User className="w-4 h-4 text-slate-500" />
+            <span>Physician Staff ID / Medical Council Reg.</span>
+          </label>
+          <input
+            id="input-doctor-staff-id"
+            type="text"
+            required
+            value={staffId}
+            onChange={(e) => setStaffId(e.target.value)}
+            className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-300 rounded-xl font-bold text-slate-900 focus:border-[#0E4A5C] focus:ring-4 focus:ring-cyan-100"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+            <KeyRound className="w-4 h-4 text-slate-500" />
+            <span>Secure Password / Smart Card PIN</span>
+          </label>
+          <input
+            id="input-doctor-password"
+            type="password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-300 rounded-xl font-bold text-slate-900 focus:border-[#0E4A5C] focus:ring-4 focus:ring-cyan-100"
+          />
+        </div>
+
+        <div className="pt-2">
+          <button
+            id="btn-submit-doctor-login"
+            type="submit"
+            disabled={isLoading}
+            className="w-full py-4 bg-[#0E4A5C] hover:bg-[#082F3B] text-white font-extrabold text-lg rounded-xl shadow-md flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95"
+          >
+            {isLoading ? (
+              <span>Authenticating Credentials...</span>
+            ) : (
+              <>
+                <ShieldCheck className="w-6 h-6" />
+                <span>Log In to OPD EMR Dashboard</span>
+                <ArrowRight className="w-5 h-5" />
+              </>
+            )}
+          </button>
+        </div>
+
+        <p className="text-center text-[11px] text-slate-400 font-medium pt-2">
+          HIPAA & ABDM Compliant • 256-Bit TLS End-to-End History Transmission
+        </p>
+      </form>
+    </div>
+  );
+};

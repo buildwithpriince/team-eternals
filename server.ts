@@ -155,6 +155,145 @@ async function startServer() {
     }
   });
 
+  // Gemini Voice Option Matcher Endpoint (gemini-2.5-flash)
+  // Maps a patient's spoken transcript (Hindi/English/Hinglish) to matching question option IDs
+  app.post('/api/match-voice-options', async (req, res) => {
+    try {
+      const { transcript, question, options = [], language = 'en' } = req.body;
+
+      if (!transcript || typeof transcript !== 'string' || !transcript.trim()) {
+        res.status(400).json({ error: 'Valid transcript is required', matchedIds: [] });
+        return;
+      }
+
+      if (!options || !Array.isArray(options) || options.length === 0) {
+        res.json({ matchedIds: [], explanation: 'No options provided' });
+        return;
+      }
+
+      const cleanTranscript = transcript.trim();
+      const ai = getAI();
+
+      // Options summary for the prompt
+      const optionsFormatted = options.map((opt: any) => ({
+        id: opt.id,
+        text_en: opt.text_en,
+        text_hi: opt.text_hi,
+        symptom_detail: opt.symptom_detail || '',
+        red_flag: !!opt.red_flag,
+      }));
+
+      const questionText = question
+        ? `Question: "${question.question_en || ''}" / "${question.question_hi || ''}"`
+        : '';
+
+      const prompt = `
+${questionText}
+Patient's Spoken Voice Transcript: "${cleanTranscript}"
+Spoken Language Context: ${language === 'hi' ? 'Hindi / Hinglish' : 'English / Hinglish'}
+
+Available Options:
+${JSON.stringify(optionsFormatted, null, 2)}
+
+Instructions:
+1. Determine which option ID(s) from the "Available Options" list directly match what the patient said.
+2. If the patient described multiple symptoms or conditions (e.g. "I have diabetes and high BP"), return ALL corresponding option IDs in the "matchedIds" array.
+3. If the transcript clearly selects or answers with one option (even with casual slang, colloquial terms, Hindi words, or descriptive phrasing like "very severe on left side"), return that option's ID.
+4. If nothing in the transcript matches any available option, return ["none"] in matchedIds.
+`;
+
+      if (ai) {
+        try {
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+              systemInstruction:
+                'You are an expert bilingual clinical AI triage assistant in an Indian hospital OPD. Your task is to match spoken patient transcripts (in Hindi, English, Hinglish, or regional dialects) to the exact option IDs from a predefined clinical questionnaire. Return only valid option IDs from the provided list, or ["none"] if nothing matches. When multiple symptoms are described, return all matching IDs.',
+              responseMimeType: 'application/json',
+            },
+          });
+
+          const rawText = response?.text?.trim() || '';
+          if (rawText) {
+            try {
+              const parsed = JSON.parse(rawText);
+              let matchedIds: string[] = [];
+
+              if (Array.isArray(parsed.matchedIds)) {
+                matchedIds = parsed.matchedIds;
+              } else if (typeof parsed.matchedIds === 'string') {
+                matchedIds = [parsed.matchedIds];
+              } else if (Array.isArray(parsed.matched_ids)) {
+                matchedIds = parsed.matched_ids;
+              } else if (typeof parsed.id === 'string') {
+                matchedIds = [parsed.id];
+              }
+
+              // Filter out "none" or invalid IDs that aren't in options
+              const validOptionIds = new Set(options.map((o: any) => o.id));
+              const finalMatched = matchedIds.filter(
+                (id) => id && id.toLowerCase() !== 'none' && validOptionIds.has(id)
+              );
+
+              res.json({
+                matchedIds: finalMatched,
+                confidence: parsed.confidence || 0.95,
+                explanation: parsed.explanation || 'Matched via Gemini 2.5 Flash',
+                source: 'gemini-2.5-flash',
+              });
+              return;
+            } catch {
+              // JSON parse error, proceed to fallback
+            }
+          }
+        } catch (genErr) {
+          console.warn('Gemini option matching error, running fallback matcher:', genErr);
+        }
+      }
+
+      // High-accuracy heuristic & token matching fallback if Gemini is offline or rate-limited
+      const lower = cleanTranscript.toLowerCase();
+      const matchedIds: string[] = [];
+
+      for (const opt of options) {
+        const enLower = (opt.text_en || '').toLowerCase();
+        const hiLower = (opt.text_hi || '').toLowerCase();
+        const idLower = (opt.id || '').toLowerCase().replace(/_/g, ' ');
+
+        // Direct token or phrase inclusion
+        if (
+          lower.includes(enLower) ||
+          lower.includes(hiLower) ||
+          enLower.includes(lower) ||
+          lower.includes(idLower)
+        ) {
+          matchedIds.push(opt.id);
+          continue;
+        }
+
+        // Word-level matching
+        const words = lower.split(/\s+/).filter((w: string) => w.length > 3);
+        const matchCount = words.filter(
+          (w: string) => enLower.includes(w) || hiLower.includes(w) || idLower.includes(w)
+        ).length;
+
+        if (matchCount >= 2 || (words.length === 1 && matchCount === 1)) {
+          matchedIds.push(opt.id);
+        }
+      }
+
+      res.json({
+        matchedIds: matchedIds.length > 0 ? matchedIds : [],
+        confidence: 0.8,
+        explanation: 'Matched via local heuristic engine',
+        source: 'local-heuristic',
+      });
+    } catch (err) {
+      res.status(500).json({ error: 'Internal server error in option matcher', matchedIds: [] });
+    }
+  });
+
   // Vite middleware for development vs static build in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

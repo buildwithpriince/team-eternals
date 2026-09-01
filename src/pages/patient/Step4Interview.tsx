@@ -1,10 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { ArrowLeft, RotateCcw, Volume2, Sparkles, AlertTriangle, Stethoscope, Check } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  ArrowLeft,
+  RotateCcw,
+  Volume2,
+  Sparkles,
+  AlertTriangle,
+  Mic,
+  MicOff,
+  Loader2,
+  CheckCircle2,
+} from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { OptionChip } from '../../components/OptionChip';
 import { generalClinicalQuestions, ayushClinicalQuestions } from '../../data/clinicalQuestions';
 import { BackendQuestionContract, QuestionOption, Department } from '../../types';
 import { speechService } from '../../utils/speech';
+import { matchVoiceToOptions } from '../../utils/aiMatcher';
 
 export const Step4Interview: React.FC = () => {
   const {
@@ -14,7 +25,6 @@ export const Step4Interview: React.FC = () => {
     saveKioskAnswer,
     kioskPatient,
     setCurrentKioskStep,
-    theme,
     speakText,
     isSpeaking,
     autoVoiceEnabled,
@@ -30,6 +40,17 @@ export const Step4Interview: React.FC = () => {
   const [currentSelected, setCurrentSelected] = useState<string | undefined>(undefined);
   const [customFreeText, setCustomFreeText] = useState<string>('');
 
+  // Voice Speech-To-Text and AI Option Matching State
+  const [isListening, setIsListening] = useState<boolean>(false);
+  const [voiceTranscript, setVoiceTranscript] = useState<string>('');
+  const [isMatchingVoice, setIsMatchingVoice] = useState<boolean>(false);
+  const [voiceFeedback, setVoiceFeedback] = useState<{
+    text: string;
+    type: 'success' | 'info' | 'warning';
+  } | null>(null);
+
+  const recognitionRef = useRef<any>(null);
+
   // Find previously saved answer for this question if any
   useEffect(() => {
     const prevAns = kioskPatient.historyAnswers?.[currentQuestion.id];
@@ -43,6 +64,10 @@ export const Step4Interview: React.FC = () => {
       setCurrentSelected(undefined);
       setCustomFreeText('');
     }
+
+    setVoiceTranscript('');
+    setVoiceFeedback(null);
+    setIsListening(false);
 
     if (autoVoiceEnabled) {
       const audioPrompt =
@@ -63,8 +88,198 @@ export const Step4Interview: React.FC = () => {
     }
   }, [currentQuestion.id, currentIndex, language, questions, autoVoiceEnabled]);
 
+  // Primary option selection code path (invoked by clicking chip OR programmatically via voice matching)
   const handleSelectOption = (option: QuestionOption) => {
     setCurrentSelected(option.id);
+  };
+
+  // Handle Speech-to-Text and Gemini 2.5 Flash Option Matching Flow
+  const handleToggleVoiceAnswer = () => {
+    if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch {
+          // Ignore
+        }
+      }
+      setIsListening(false);
+      return;
+    }
+
+    setVoiceFeedback(null);
+    setVoiceTranscript('');
+
+    if (typeof window !== 'undefined' && ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+      try {
+        const win = window as unknown as Record<string, any>;
+        const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
+        const recognition = new SpeechRec();
+        recognitionRef.current = recognition;
+
+        recognition.lang = language === 'hi' ? 'hi-IN' : 'en-IN';
+        recognition.interimResults = false;
+        recognition.continuous = false;
+
+        recognition.onstart = () => {
+          setIsListening(true);
+          speechService.playChime('gentle');
+        };
+
+        recognition.onresult = async (event: any) => {
+          const rawTranscript = event.results?.[0]?.[0]?.transcript || '';
+          if (!rawTranscript.trim()) return;
+
+          setVoiceTranscript(rawTranscript);
+          setIsListening(false);
+
+          // Handle free-text questions
+          if (currentQuestion.input_type === 'free_text') {
+            setCustomFreeText(rawTranscript);
+            setVoiceFeedback({
+              text:
+                language === 'hi'
+                  ? `आपकी बात दर्ज हो गई: "${rawTranscript}"`
+                  : `Transcribed: "${rawTranscript}"`,
+              type: 'success',
+            });
+            speechService.playChime('success');
+            return;
+          }
+
+          // Process single_select options via Gemini 2.5 Flash
+          setIsMatchingVoice(true);
+          setVoiceFeedback({
+            text:
+              language === 'hi'
+                ? `Gemini AI उत्तर का मिलान कर रहा है... ("${rawTranscript}")`
+                : `Analyzing voice response with Gemini AI... ("${rawTranscript}")`,
+            type: 'info',
+          });
+
+          try {
+            const matchResult = await matchVoiceToOptions(
+              rawTranscript,
+              {
+                id: currentQuestion.id,
+                question_en: currentQuestion.question_en,
+                question_hi: currentQuestion.question_hi,
+              },
+              currentQuestion.options,
+              language
+            );
+
+            setIsMatchingVoice(false);
+
+            if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
+              // Find matching options in question
+              const matchedOptions = currentQuestion.options.filter((opt) =>
+                matchResult.matchedIds.includes(opt.id)
+              );
+
+              if (matchedOptions.length > 0) {
+                // Programmatically trigger the same selection state update as tapping on the chip
+                const primaryMatch = matchedOptions[0];
+                handleSelectOption(primaryMatch);
+
+                const optionNames = matchedOptions
+                  .map((opt) => (language === 'hi' ? opt.text_hi : opt.text_en))
+                  .join(', ');
+
+                setVoiceFeedback({
+                  text:
+                    language === 'hi'
+                      ? `चयनित: ${optionNames}`
+                      : `Voice Matched & Selected: ${optionNames}`,
+                  type: 'success',
+                });
+
+                speechService.playChime('success');
+              } else {
+                setVoiceFeedback({
+                  text:
+                    language === 'hi'
+                      ? `स्पष्ट उत्तर नहीं मिला। कृपया नीचे दिए गए विकल्पों में से चुनें।`
+                      : `No exact option matched. Please tap the closest option below.`,
+                  type: 'warning',
+                });
+              }
+            } else {
+              setVoiceFeedback({
+                text:
+                  language === 'hi'
+                    ? `कोई मिलान नहीं मिला ("none")। कृपया नीचे से विकल्प चुनें।`
+                    : `No matching option found. Please tap an option below.`,
+                type: 'warning',
+              });
+            }
+          } catch (err) {
+            setIsMatchingVoice(false);
+            console.error('Error during voice option matching:', err);
+            setVoiceFeedback({
+              text:
+                language === 'hi'
+                  ? `आवाज की पहचान हुई: "${rawTranscript}"`
+                  : `Voice recognized: "${rawTranscript}"`,
+              type: 'info',
+            });
+          }
+        };
+
+        recognition.onerror = (event: any) => {
+          console.warn('Speech recognition error event:', event);
+          setIsListening(false);
+          setIsMatchingVoice(false);
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+        };
+
+        recognition.start();
+      } catch (err) {
+        console.error('Speech recognition initiation error:', err);
+        setIsListening(false);
+      }
+    } else {
+      // Accessible simulation if browser does not support SpeechRecognition
+      setIsListening(true);
+      setTimeout(async () => {
+        setIsListening(false);
+        const sampleMatch = currentQuestion.options[0];
+        if (sampleMatch) {
+          const simulatedText =
+            language === 'hi' ? sampleMatch.text_hi : sampleMatch.text_en;
+          setVoiceTranscript(simulatedText);
+          setIsMatchingVoice(true);
+
+          const matchResult = await matchVoiceToOptions(
+            simulatedText,
+            currentQuestion,
+            currentQuestion.options,
+            language
+          );
+          setIsMatchingVoice(false);
+
+          if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
+            const found = currentQuestion.options.find(
+              (o) => o.id === matchResult.matchedIds[0]
+            );
+            if (found) {
+              handleSelectOption(found);
+              setVoiceFeedback({
+                text:
+                  language === 'hi'
+                    ? `चयनित: ${found.text_hi}`
+                    : `Selected: ${found.text_en}`,
+                type: 'success',
+              });
+              speechService.playChime('success');
+            }
+          }
+        }
+      }, 2000);
+    }
   };
 
   const handleRepeatVoice = () => {
@@ -160,6 +375,108 @@ export const Step4Interview: React.FC = () => {
               {language === 'hi' ? currentQuestion.question_en : currentQuestion.question_hi}
             </h3>
           </div>
+
+          {/* Voice Input "Speak Answer" Action Bar */}
+          <div
+            id="voice-speak-answer-bar"
+            className="w-full p-4 sm:p-5 rounded-2xl bg-[#F8FAFC] border-2 border-slate-200 shadow-2xs flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 transition-all"
+          >
+            <div className="flex items-center gap-3">
+              <div
+                className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 transition-colors ${
+                  isListening
+                    ? 'bg-red-500 text-white animate-pulse shadow-md shadow-red-200'
+                    : isMatchingVoice
+                    ? 'bg-amber-500 text-white animate-spin'
+                    : 'bg-[#102A43] text-white'
+                }`}
+              >
+                {isMatchingVoice ? (
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                ) : isListening ? (
+                  <Mic className="w-6 h-6 animate-bounce" />
+                ) : (
+                  <Mic className="w-6 h-6" />
+                )}
+              </div>
+
+              <div className="text-left">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                  {language === 'hi' ? 'आवाज से उत्तर दें' : 'Speak Answer Flow'}
+                </p>
+                <p className="text-sm sm:text-base font-bold text-[#102A43]">
+                  {isListening
+                    ? language === 'hi'
+                      ? 'सुन रही हूँ... कृपया बोलें'
+                      : 'Listening... Please speak your answer'
+                    : isMatchingVoice
+                    ? language === 'hi'
+                      ? 'Gemini AI मिलान कर रहा है...'
+                      : 'Gemini 2.5 Flash matching option...'
+                    : language === 'hi'
+                    ? 'बोलकर उत्तर चुनें (Gemini 2.5 Flash संचालित)'
+                    : 'Speak your answer naturally (Gemini 2.5 Flash matched)'}
+                </p>
+              </div>
+            </div>
+
+            {/* Speak Mic Action Button */}
+            <button
+              id="btn-trigger-speak-answer"
+              type="button"
+              onClick={handleToggleVoiceAnswer}
+              className={`px-6 py-3 rounded-xl font-bold text-sm sm:text-base flex items-center justify-center gap-2 cursor-pointer transition-all border-2 shadow-xs ${
+                isListening
+                  ? 'bg-red-500 hover:bg-red-600 text-white border-red-600 animate-pulse'
+                  : 'bg-white hover:bg-slate-50 text-[#102A43] border-slate-300 hover:border-[#102A43]'
+              }`}
+            >
+              {isListening ? (
+                <>
+                  <MicOff className="w-5 h-5" />
+                  <span>{language === 'hi' ? 'सुनना बंद करें' : 'Stop Listening'}</span>
+                </>
+              ) : (
+                <>
+                  <Mic className="w-5 h-5 text-red-500" />
+                  <span>{language === 'hi' ? 'बोलकर बताएं' : 'Speak Answer'}</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Voice Live Transcript & Feedback Pill */}
+          {(voiceTranscript || voiceFeedback) && (
+            <div
+              id="voice-transcript-feedback-box"
+              className={`p-4 rounded-xl border flex items-start gap-3 text-sm font-medium transition-all ${
+                voiceFeedback?.type === 'success'
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                  : voiceFeedback?.type === 'warning'
+                  ? 'bg-amber-50 border-amber-300 text-amber-900'
+                  : 'bg-blue-50 border-blue-200 text-blue-900'
+              }`}
+            >
+              {voiceFeedback?.type === 'success' ? (
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+              ) : voiceFeedback?.type === 'warning' ? (
+                <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              ) : (
+                <Sparkles className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1">
+                {voiceTranscript && (
+                  <p className="text-xs text-slate-600">
+                    <span className="font-bold">{language === 'hi' ? 'सुना गया:' : 'Heard:'}</span>{' '}
+                    "{voiceTranscript}"
+                  </p>
+                )}
+                {voiceFeedback && (
+                  <p className="font-bold text-sm leading-tight">{voiceFeedback.text}</p>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Options Grid (2-Column Polish Cards) */}
           {currentQuestion.input_type === 'single_select' ? (

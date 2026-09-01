@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { HelpCircle, ArrowRight, Sparkles, Stethoscope } from 'lucide-react';
+import { HelpCircle, ArrowRight, Sparkles, Stethoscope, Loader2 } from 'lucide-react';
 import { BackendQuestionContract, QuestionOption } from '../types';
 import { OptionChip } from './OptionChip';
 import { VoicePrompter } from './VoicePrompter';
 import { useApp } from '../context/AppContext';
+import { matchVoiceToOptions } from '../utils/aiMatcher';
+import { speechService } from '../utils/speech';
 
 interface QuestionCardProps {
   question: BackendQuestionContract;
@@ -21,11 +23,14 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
   const { language, theme, speakText, autoVoiceEnabled } = useApp();
   const [currentSelected, setCurrentSelected] = useState<string | undefined>(selectedOptionId);
   const [customFreeText, setCustomFreeText] = useState<string>('');
+  const [isMatchingVoice, setIsMatchingVoice] = useState<boolean>(false);
+  const [voiceStatus, setVoiceStatus] = useState<string | null>(null);
 
   // When question changes, speak question if autoVoice is on
   useEffect(() => {
     setCurrentSelected(selectedOptionId);
     setCustomFreeText('');
+    setVoiceStatus(null);
 
     if (autoVoiceEnabled) {
       const audioPrompt =
@@ -38,6 +43,59 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
 
   const handleSelectOption = (option: QuestionOption) => {
     setCurrentSelected(option.id);
+  };
+
+  const handleVoiceInput = async (transcript: string) => {
+    if (!transcript.trim()) return;
+
+    if (question.input_type === 'free_text') {
+      setCustomFreeText(transcript);
+      setVoiceStatus(language === 'hi' ? `दर्ज हुआ: "${transcript}"` : `Transcribed: "${transcript}"`);
+      speechService.playChime('success');
+      return;
+    }
+
+    setIsMatchingVoice(true);
+    setVoiceStatus(language === 'hi' ? 'Gemini AI उत्तर का मिलान कर रहा है...' : 'Matching with Gemini AI...');
+
+    try {
+      const matchResult = await matchVoiceToOptions(
+        transcript,
+        {
+          id: question.id,
+          question_en: question.question_en,
+          question_hi: question.question_hi,
+        },
+        question.options,
+        language
+      );
+
+      setIsMatchingVoice(false);
+
+      if (matchResult.matchedIds && matchResult.matchedIds.length > 0) {
+        const matched = question.options.find((o) => matchResult.matchedIds.includes(o.id));
+        if (matched) {
+          // Programmatically trigger the exact same selection state update
+          handleSelectOption(matched);
+          setVoiceStatus(
+            language === 'hi'
+              ? `चयनित: ${matched.text_hi}`
+              : `Matched & Selected: ${matched.text_en}`
+          );
+          speechService.playChime('success');
+          return;
+        }
+      }
+
+      setVoiceStatus(
+        language === 'hi'
+          ? `कोई मिलान नहीं मिला ("${transcript}")। कृपया नीचे से चुनें।`
+          : `No match found ("${transcript}"). Please select below.`
+      );
+    } catch (err) {
+      setIsMatchingVoice(false);
+      console.error('QuestionCard voice match error:', err);
+    }
   };
 
   const handleConfirmNext = () => {
@@ -67,21 +125,15 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
       <VoicePrompter
         promptEn={question.audio_prompt_en || question.question_en}
         promptHi={question.audio_prompt_hi || question.question_hi}
-        onVoiceInput={(transcript) => {
-          setCustomFreeText(transcript);
-          // Try to match option
-          const lower = transcript.toLowerCase();
-          const match = question.options.find(
-            (o) =>
-              o.text_hi.toLowerCase().includes(lower) ||
-              o.text_en.toLowerCase().includes(lower) ||
-              lower.includes(o.id)
-          );
-          if (match) {
-            setCurrentSelected(match.id);
-          }
-        }}
+        onVoiceInput={handleVoiceInput}
       />
+
+      {voiceStatus && (
+        <div className="text-xs p-2.5 rounded-lg bg-slate-100 text-slate-700 font-medium flex items-center gap-2">
+          {isMatchingVoice && <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />}
+          <span>{voiceStatus}</span>
+        </div>
+      )}
 
       {/* Main Question Heading */}
       <div className="space-y-2 text-left">

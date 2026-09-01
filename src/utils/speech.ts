@@ -1,27 +1,44 @@
 import { AppLanguage } from '../types';
 
+interface TTSResponse {
+  audioBase64?: string;
+  mimeType?: string;
+  error?: string;
+  fallback?: boolean;
+}
+
+const DEFAULT_VOICE = 'Despina';
+
 class SpeechService {
-  private synth: SpeechSynthesis | null = null;
-  private currentUtterance: SpeechSynthesisUtterance | null = null;
-  private isSupported: boolean = false;
   private audioContext: AudioContext | null = null;
+  private currentSource: AudioBufferSourceNode | null = null;
+  private isCurrentlyPlaying: boolean = false;
+  private abortController: AbortController | null = null;
+  private bufferCache: Map<string, AudioBuffer> = new Map();
+  private synth: SpeechSynthesis | null = null;
 
   constructor() {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       this.synth = window.speechSynthesis;
-      this.isSupported = true;
     }
   }
 
   private getAudioContext(): AudioContext {
     if (!this.audioContext) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.audioContext = new AudioCtx();
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.audioContext = new AudioCtx({ sampleRate: 24000 });
     }
     if (this.audioContext.state === 'suspended') {
-      this.audioContext.resume();
+      this.audioContext.resume().catch(() => {});
     }
     return this.audioContext;
+  }
+
+  // Generate unique cache key from (text + voice name + language)
+  private getCacheKey(text: string, voice: string = DEFAULT_VOICE, lang: AppLanguage = 'en'): string {
+    return `tts_${voice}_${lang}_${text.trim().toLowerCase()}`;
   }
 
   // Play an accessible pleasant chime for feedback
@@ -63,48 +80,101 @@ class SpeechService {
     }
   }
 
-  public speak(
+  private async decodeAudio(base64Data: string): Promise<AudioBuffer> {
+    const ctx = this.getAudioContext();
+    const binaryString = atob(base64Data);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+
+    // Check if it's a RIFF/WAV format
+    if (
+      bytes.length >= 4 &&
+      bytes[0] === 0x52 &&
+      bytes[1] === 0x49 &&
+      bytes[2] === 0x46 &&
+      bytes[3] === 0x46
+    ) {
+      return await ctx.decodeAudioData(bytes.buffer.slice(0));
+    }
+
+    // Otherwise, treat as raw 16-bit PCM little endian (24kHz, 1 channel)
+    const sampleRate = 24000;
+    const int16Array = new Int16Array(bytes.buffer);
+    const float32Array = new Float32Array(int16Array.length);
+    for (let i = 0; i < int16Array.length; i++) {
+      float32Array[i] = int16Array[i] / 32768.0;
+    }
+    const audioBuffer = ctx.createBuffer(1, float32Array.length, sampleRate);
+    audioBuffer.copyToChannel(float32Array, 0);
+    return audioBuffer;
+  }
+
+  // Silent fallback to Web Speech API when quota/rate limits occur
+  private speakFallback(
     text: string,
     lang: AppLanguage = 'hi',
     onStart?: () => void,
     onEnd?: () => void,
     onError?: () => void
-  ): void {
+  ) {
     if (!this.synth) {
       if (onStart) onStart();
-      setTimeout(() => { if (onEnd) onEnd(); }, 2000);
+      setTimeout(() => {
+        if (onEnd) onEnd();
+      }, 1500);
       return;
     }
 
-    this.stop();
+    this.synth.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    this.currentUtterance = utterance;
-
-    // Pick best voice
     const voices = this.synth.getVoices();
     const targetLang = lang === 'hi' ? 'hi-IN' : 'en-IN';
-    
-    const matchedVoice = voices.find(v => v.lang === targetLang || v.lang.startsWith(lang === 'hi' ? 'hi' : 'en'));
+
+    // Prioritize soft, mild female voices in Hindi and English
+    const femaleKeywords = [
+      'female',
+      'swara',
+      'heera',
+      'kalpana',
+      'zira',
+      'samantha',
+      'serena',
+      'karen',
+      'victoria',
+      'veena',
+      'natural',
+      'google',
+    ];
+    const matchingLangVoices = voices.filter(
+      (v) => v.lang === targetLang || v.lang.startsWith(lang === 'hi' ? 'hi' : 'en')
+    );
+
+    const matchedVoice =
+      matchingLangVoices.find((v) =>
+        femaleKeywords.some((kw) => v.name.toLowerCase().includes(kw))
+      ) || matchingLangVoices[0];
+
     if (matchedVoice) {
       utterance.voice = matchedVoice;
     }
-    
     utterance.lang = targetLang;
-    utterance.rate = lang === 'hi' ? 0.92 : 0.95; // Slightly slower for elderly comprehension
-    utterance.pitch = 1.0;
+    utterance.rate = 0.92;
+    utterance.pitch = 1.05;
 
     utterance.onstart = () => {
+      this.isCurrentlyPlaying = true;
       if (onStart) onStart();
     };
-
     utterance.onend = () => {
-      this.currentUtterance = null;
+      this.isCurrentlyPlaying = false;
       if (onEnd) onEnd();
     };
-
     utterance.onerror = () => {
-      this.currentUtterance = null;
+      this.isCurrentlyPlaying = false;
       if (onError) onError();
       if (onEnd) onEnd();
     };
@@ -112,19 +182,163 @@ class SpeechService {
     try {
       this.synth.speak(utterance);
     } catch {
+      this.isCurrentlyPlaying = false;
+      if (onEnd) onEnd();
+    }
+  }
+
+  public async speak(
+    text: string,
+    lang: AppLanguage = 'hi',
+    onStart?: () => void,
+    onEnd?: () => void,
+    onError?: () => void
+  ): Promise<void> {
+    if (!text || text.trim().length === 0) {
+      if (onEnd) onEnd();
+      return;
+    }
+
+    this.stop();
+
+    const cleanText = text.trim();
+    const cacheKey = this.getCacheKey(cleanText, DEFAULT_VOICE, lang);
+
+    // 1. In-memory Cache Hit: Play directly
+    if (this.bufferCache.has(cacheKey)) {
+      const audioBuffer = this.bufferCache.get(cacheKey)!;
+      this.playAudioBuffer(audioBuffer, onStart, onEnd);
+      return;
+    }
+
+    // 2. Local Storage Cache Hit (survives reloads): Decode and play directly
+    try {
+      const cachedBase64 = localStorage.getItem(cacheKey);
+      if (cachedBase64) {
+        const audioBuffer = await this.decodeAudio(cachedBase64);
+        this.bufferCache.set(cacheKey, audioBuffer);
+        this.playAudioBuffer(audioBuffer, onStart, onEnd);
+        return;
+      }
+    } catch {
+      // LocalStorage access error or quota exceeded, proceed to API call
+    }
+
+    // 3. Genuine Cache Miss: Call the TTS API
+    this.abortController = new AbortController();
+
+    try {
+      const response = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: cleanText,
+          language: lang,
+          voice: DEFAULT_VOICE,
+        }),
+        signal: this.abortController.signal,
+      });
+
+      if (!response.ok) {
+        console.warn(`Gemini TTS API returned status ${response.status}. Falling back silently to browser speech synthesis.`);
+        this.speakFallback(cleanText, lang, onStart, onEnd, onError);
+        return;
+      }
+
+      const data: TTSResponse = await response.json();
+
+      if (data.fallback || !data.audioBase64) {
+        if (data.error) {
+          console.warn(`Gemini TTS info: ${data.error}. Falling back silently to browser speech synthesis.`);
+        }
+        this.speakFallback(cleanText, lang, onStart, onEnd, onError);
+        return;
+      }
+
+      const audioBuffer = await this.decodeAudio(data.audioBase64);
+
+      // Save to memory cache
+      if (this.bufferCache.size > 100) {
+        const firstKey = this.bufferCache.keys().next().value;
+        if (firstKey) this.bufferCache.delete(firstKey);
+      }
+      this.bufferCache.set(cacheKey, audioBuffer);
+
+      // Save to persistent storage if size permits
+      try {
+        localStorage.setItem(cacheKey, data.audioBase64);
+      } catch {
+        // LocalStorage quota may be full, memory cache still holds it
+      }
+
+      this.playAudioBuffer(audioBuffer, onStart, onEnd);
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        // Request was interrupted by next user prompt
+        return;
+      }
+      console.warn('Gemini TTS network/execution error, falling back silently to browser speech synthesis:', err);
+      this.speakFallback(cleanText, lang, onStart, onEnd, onError);
+    }
+  }
+
+  private playAudioBuffer(
+    buffer: AudioBuffer,
+    onStart?: () => void,
+    onEnd?: () => void
+  ) {
+    try {
+      const ctx = this.getAudioContext();
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+
+      this.currentSource = source;
+      this.isCurrentlyPlaying = true;
+
+      if (onStart) onStart();
+
+      source.onended = () => {
+        if (this.currentSource === source) {
+          this.currentSource = null;
+          this.isCurrentlyPlaying = false;
+          if (onEnd) onEnd();
+        }
+      };
+
+      source.start(0);
+    } catch (err) {
+      console.warn('AudioBuffer playback error, falling back:', err);
+      this.isCurrentlyPlaying = false;
       if (onEnd) onEnd();
     }
   }
 
   public stop(): void {
+    if (this.abortController) {
+      this.abortController.abort();
+      this.abortController = null;
+    }
+
+    if (this.currentSource) {
+      try {
+        this.currentSource.stop();
+        this.currentSource.disconnect();
+      } catch {
+        // Ignore if already stopped
+      }
+      this.currentSource = null;
+    }
+
     if (this.synth) {
       this.synth.cancel();
-      this.currentUtterance = null;
     }
+
+    this.isCurrentlyPlaying = false;
   }
 
   public isSpeaking(): boolean {
-    return this.synth ? this.synth.speaking : false;
+    return this.isCurrentlyPlaying;
   }
 }
 

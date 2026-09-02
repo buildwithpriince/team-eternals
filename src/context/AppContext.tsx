@@ -80,6 +80,9 @@ interface AppContextType {
   // Doctor Dashboard State
   loggedInDoctor: DoctorUser | null;
   setLoggedInDoctor: (doc: DoctorUser | null) => void;
+  doctorDarkMode: boolean;
+  setDoctorDarkMode: (val: boolean) => void;
+  toggleDoctorDarkMode: () => void;
   patients: PatientRecord[];
   refreshQueue: () => Promise<void>;
   activeDoctorPatient: PatientRecord | null;
@@ -113,6 +116,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Doctors & Patient Database (Strictly initialized empty, populated from real Supabase records)
   const [loggedInDoctor, setLoggedInDoctor] = useState<DoctorUser | null>(mockDoctors[0]);
+  const [doctorDarkMode, setDoctorDarkModeState] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('doctor_dark_mode');
+      return saved !== null ? saved === 'true' : true; // Default to true (high contrast dark mode enabled for doctor night shifts)
+    } catch {
+      return true;
+    }
+  });
+
+  const setDoctorDarkMode = useCallback((val: boolean) => {
+    setDoctorDarkModeState(val);
+    try {
+      localStorage.setItem('doctor_dark_mode', String(val));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const toggleDoctorDarkMode = useCallback(() => {
+    setDoctorDarkModeState((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('doctor_dark_mode', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
+
   const [patients, setPatients] = useState<PatientRecord[]>([]);
   const [activeDoctorPatient, setActiveDoctorPatient] = useState<PatientRecord | null>(null);
   const [redFlagAlerts, setRedFlagAlerts] = useState<RedFlagAlert[]>([]);
@@ -664,6 +697,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setAutoVoiceEnabled,
         loggedInDoctor,
         setLoggedInDoctor,
+        doctorDarkMode,
+        setDoctorDarkMode,
+        toggleDoctorDarkMode,
         patients,
         refreshQueue,
         activeDoctorPatient,

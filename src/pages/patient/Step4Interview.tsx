@@ -696,7 +696,7 @@ export const Step4Interview: React.FC = () => {
   return (
     <div
       id="step-4-interview-container"
-      className="w-full max-w-7xl mx-auto flex flex-col space-y-5 animate-fadeIn text-left"
+      className="w-full max-w-7xl mx-auto flex flex-col space-y-5 animate-fadeIn text-left pb-28 sm:pb-32"
     >
       {/* Relative Width Layout for Laptop / Desktop screens (69-70% main, 28-30% sidebar) */}
       <div className="w-full flex flex-col lg:flex-row items-start gap-5 xl:gap-6">
@@ -1038,99 +1038,106 @@ export const Step4Interview: React.FC = () => {
         </aside>
       </div>
 
-      {/* Footer Navigation Bar */}
-      <footer className="w-full bg-white border border-slate-200 rounded-2xl px-6 sm:px-10 py-3.5 sm:py-4 flex flex-wrap items-center justify-between gap-4 shadow-xs">
-        {/* Left: Back & Repeat Voice Actions */}
-        <div className="flex items-center space-x-6 sm:space-x-8">
-          <button
-            type="button"
-            onClick={handlePreviousQuestion}
-            className="flex items-center space-x-3 group cursor-pointer text-left"
-          >
-            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors">
-              <ArrowLeft className="w-5 h-5 sm:w-6 sm:h-6 text-[#102A43]" />
-            </div>
-            <div>
-              <p className="text-xs font-black uppercase text-slate-400">Back</p>
-              <p className="text-sm font-bold text-[#102A43]">पीछे जाएं</p>
-            </div>
-          </button>
+      {/* Fixed Footer Navigation Bar Pinned to Viewport Bottom */}
+      <footer
+        id="interview-fixed-bottom-bar"
+        className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-2xl py-3 sm:py-3.5"
+      >
+        <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3 sm:gap-4">
+          {/* Left: Back & Repeat Voice Actions */}
+          <div className="flex items-center space-x-4 sm:space-x-8">
+            <button
+              id="btn-interview-back"
+              type="button"
+              onClick={handlePreviousQuestion}
+              className="flex items-center space-x-2 sm:space-x-3 group cursor-pointer text-left shrink-0"
+            >
+              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors">
+                <ArrowLeft className="w-5 h-5 text-[#102A43]" />
+              </div>
+              <div>
+                <p className="text-[10px] sm:text-xs font-black uppercase text-slate-400 leading-tight">Back</p>
+                <p className="text-xs sm:text-sm font-bold text-[#102A43] leading-tight">पीछे जाएं</p>
+              </div>
+            </button>
 
-          <button
-            type="button"
-            onClick={handleRepeatVoice}
-            className="flex items-center space-x-3 group cursor-pointer text-left"
-          >
-            <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors">
-              <RotateCcw className="w-5 h-5 sm:w-6 sm:h-6 text-[#102A43]" />
-            </div>
-            <div>
-              <p className="text-xs font-black uppercase text-slate-400">Repeat</p>
-              <p className="text-sm font-bold text-[#102A43]">फिर से बोलें</p>
-            </div>
-          </button>
-        </div>
-
-        {/* Right: Audio Wave Equalizer & Next Button */}
-        <div className="flex items-center space-x-6">
-          {/* Animated Audio Equalizer Bars */}
-          <div className="flex space-x-1 items-center" title="Voice audio channel active">
-            <div
-              className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
-                isSpeaking ? 'h-5 animate-pulse' : 'h-3'
-              }`}
-            />
-            <div
-              className={`w-1 bg-blue-500 rounded-full transition-all duration-200 ${
-                isSpeaking ? 'h-8 animate-pulse' : 'h-6'
-              }`}
-            />
-            <div
-              className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
-                isSpeaking ? 'h-6 animate-pulse' : 'h-4'
-              }`}
-            />
-            <div
-              className={`w-1 bg-blue-600 rounded-full transition-all duration-200 ${
-                isSpeaking ? 'h-10 animate-pulse' : 'h-7'
-              }`}
-            />
-            <div
-              className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
-                isSpeaking ? 'h-5 animate-pulse' : 'h-3'
-              }`}
-            />
+            <button
+              id="btn-interview-repeat"
+              type="button"
+              onClick={handleRepeatVoice}
+              className="flex items-center space-x-2 sm:space-x-3 group cursor-pointer text-left shrink-0"
+            >
+              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-slate-100 flex items-center justify-center group-hover:bg-slate-200 transition-colors">
+                <RotateCcw className="w-5 h-5 text-[#102A43]" />
+              </div>
+              <div>
+                <p className="text-[10px] sm:text-xs font-black uppercase text-slate-400 leading-tight">Repeat</p>
+                <p className="text-xs sm:text-sm font-bold text-[#102A43] leading-tight">फिर से बोलें</p>
+              </div>
+            </button>
           </div>
 
-          {/* Next Button CTA (Warm Amber with yellow border-b-4) */}
-          <button
-            id="btn-confirm-next-question"
-            type="button"
-            disabled={isNextDisabled}
-            onClick={handleConfirmNext}
-            className={`px-8 sm:px-10 py-3.5 sm:py-4 rounded-2xl font-black text-base sm:text-lg shadow-xl shadow-yellow-100/50 border-b-4 border-yellow-600 active:border-b-0 active:translate-y-1 transition-all cursor-pointer flex items-center gap-2 ${
-              isNextDisabled
-                ? 'bg-slate-200 text-slate-400 border-slate-300 shadow-none cursor-not-allowed'
-                : 'bg-[#F0B429] text-[#102A43] hover:brightness-105'
-            }`}
-          >
-            {isLoadingTurn ? (
-              <>
-                <Loader2 className="w-5 h-5 animate-spin" />
-                <span>{language === 'hi' ? 'लोड हो रहा है...' : 'PROCESSING...'}</span>
-              </>
-            ) : (
-              <span>
-                {currentQuestion.interview_complete || currentTurnNumber >= 8
-                  ? language === 'hi'
-                    ? 'पूर्ण करें | FINISH'
-                    : 'FINISH | पूर्ण करें'
-                  : language === 'hi'
-                  ? 'NEXT | अगला'
-                  : 'NEXT | अगला'}
-              </span>
-            )}
-          </button>
+          {/* Right: Audio Wave Equalizer & Next Button */}
+          <div className="flex items-center space-x-3 sm:space-x-6">
+            {/* Animated Audio Equalizer Bars */}
+            <div className="hidden sm:flex space-x-1 items-center" title="Voice audio channel active">
+              <div
+                className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
+                  isSpeaking ? 'h-5 animate-pulse' : 'h-3'
+                }`}
+              />
+              <div
+                className={`w-1 bg-blue-500 rounded-full transition-all duration-200 ${
+                  isSpeaking ? 'h-8 animate-pulse' : 'h-6'
+                }`}
+              />
+              <div
+                className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
+                  isSpeaking ? 'h-6 animate-pulse' : 'h-4'
+                }`}
+              />
+              <div
+                className={`w-1 bg-blue-600 rounded-full transition-all duration-200 ${
+                  isSpeaking ? 'h-10 animate-pulse' : 'h-7'
+                }`}
+              />
+              <div
+                className={`w-1 bg-blue-400 rounded-full transition-all duration-200 ${
+                  isSpeaking ? 'h-5 animate-pulse' : 'h-3'
+                }`}
+              />
+            </div>
+
+            {/* Next Button CTA (Warm Amber with yellow border-b-4) */}
+            <button
+              id="btn-confirm-next-question"
+              type="button"
+              disabled={isNextDisabled}
+              onClick={handleConfirmNext}
+              className={`px-6 sm:px-9 py-3 sm:py-3.5 rounded-2xl font-black text-sm sm:text-base lg:text-lg shadow-lg shadow-yellow-100/50 border-b-4 border-yellow-600 active:border-b-0 active:translate-y-1 transition-all cursor-pointer flex items-center gap-2 shrink-0 ${
+                isNextDisabled
+                  ? 'bg-slate-200 text-slate-400 border-slate-300 shadow-none cursor-not-allowed'
+                  : 'bg-[#F0B429] text-[#102A43] hover:brightness-105'
+              }`}
+            >
+              {isLoadingTurn ? (
+                <>
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                  <span>{language === 'hi' ? 'लोड हो रहा है...' : 'PROCESSING...'}</span>
+                </>
+              ) : (
+                <span>
+                  {currentQuestion.interview_complete || currentTurnNumber >= 8
+                    ? language === 'hi'
+                      ? 'पूर्ण करें | FINISH'
+                      : 'FINISH | पूर्ण करें'
+                    : language === 'hi'
+                    ? 'NEXT | अगला'
+                    : 'NEXT | अगला'}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
       </footer>
     </div>

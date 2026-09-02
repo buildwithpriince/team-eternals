@@ -18,10 +18,12 @@ import {
   ShieldCheck,
   CheckSquare,
   Undo2,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { PatientRecord, DoctorSummaryData } from '../../types';
 import { useApp } from '../../context/AppContext';
 import { DocumentExtractedCard } from '../../components/DocumentExtractedCard';
+import { PrintableClinicalSummary } from '../../components/PrintableClinicalSummary';
 import { buildDeterministicDoctorSummary } from '../../utils/summaryService';
 
 interface DoctorSummaryDetailProps {
@@ -39,6 +41,7 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
     loggedInDoctor,
     isGeneratingSummary,
     regenerateDoctorSummary,
+    doctorDarkMode,
   } = useApp();
 
   // Initialize summary data from patient record or build deterministic fallback
@@ -67,6 +70,7 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
   const [diagnosedSuccess, setDiagnosedSuccess] = useState<boolean>(patient.status === 'completed');
   const [isMarkingDiagnosed, setIsMarkingDiagnosed] = useState<boolean>(false);
   const [isRxModalOpen, setIsRxModalOpen] = useState<boolean>(false);
+  const [isPrintSummaryOpen, setIsPrintSummaryOpen] = useState<boolean>(false);
   const [modelUsed, setModelUsed] = useState<string>(initialSummary.modelUsed || 'gemini-2.5-flash');
 
   // Keep state synchronized if patient prop or summary updates
@@ -182,7 +186,13 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
       className="w-full space-y-6 text-left animate-fadeIn"
     >
       {/* Top Bar: Back to Queue + Patient Banner + Actions */}
-      <div className="bg-white rounded-2xl p-5 sm:p-6 border-2 border-slate-300 shadow-sm space-y-4">
+      <div
+        className={`rounded-2xl p-5 sm:p-6 border-2 shadow-sm space-y-4 transition-colors ${
+          doctorDarkMode
+            ? 'bg-slate-900 border-slate-700 text-white'
+            : 'bg-white border-slate-300 text-slate-900'
+        }`}
+      >
         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
           {/* Back button + Patient Header */}
           <div className="flex items-start sm:items-center gap-4">
@@ -190,7 +200,11 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               id="btn-back-to-queue"
               type="button"
               onClick={onBackToQueue}
-              className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer text-sm shrink-0"
+              className={`p-2.5 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer text-sm shrink-0 transition-colors ${
+                doctorDarkMode
+                  ? 'bg-slate-800 hover:bg-slate-750 text-white border border-slate-700'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+              }`}
             >
               <ArrowLeft className="w-4 h-4" />
               <span>Back</span>
@@ -198,19 +212,39 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
 
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
-                <span className="px-3 py-1 bg-slate-900 text-white font-black text-sm rounded-lg tracking-wider">
+                <span
+                  className={`px-3 py-1 font-black text-sm rounded-lg tracking-wider ${
+                    doctorDarkMode
+                      ? 'bg-slate-800 text-cyan-300 border border-slate-700'
+                      : 'bg-slate-900 text-white'
+                  }`}
+                >
                   {patient.tokenNumber}
                 </span>
-                <h1 className="text-2xl sm:text-3xl font-black text-slate-900">
+                <h1
+                  className={`text-2xl sm:text-3xl font-black ${
+                    doctorDarkMode ? 'text-white' : 'text-slate-900'
+                  }`}
+                >
                   {patient.name}
                 </h1>
-                <span className="text-xs font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-md">
+                <span
+                  className={`text-xs font-bold px-2.5 py-1 rounded-md ${
+                    doctorDarkMode
+                      ? 'bg-slate-800 text-slate-300'
+                      : 'bg-slate-100 text-slate-600'
+                  }`}
+                >
                   {patient.age} Yrs • {patient.gender.toUpperCase()}
                 </span>
                 <span
                   className={`text-xs font-extrabold uppercase px-2.5 py-1 rounded-md ${
                     isAyush
-                      ? 'bg-emerald-100 text-emerald-900'
+                      ? doctorDarkMode
+                        ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
+                        : 'bg-emerald-100 text-emerald-900'
+                      : doctorDarkMode
+                      ? 'bg-cyan-950 text-cyan-300 border border-cyan-800'
                       : 'bg-cyan-100 text-cyan-900'
                   }`}
                 >
@@ -218,20 +252,30 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                 </span>
 
                 {isCompleted && (
-                  <span className="inline-flex items-center gap-1.5 text-xs font-black uppercase px-3 py-1 rounded-md bg-emerald-800 text-white shadow-xs">
+                  <span
+                    className={`inline-flex items-center gap-1.5 text-xs font-black uppercase px-3 py-1 rounded-md shadow-xs ${
+                      doctorDarkMode
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-emerald-800 text-white'
+                    }`}
+                  >
                     <CheckCircle2 className="w-3.5 h-3.5" />
                     <span>Diagnosed & Treated</span>
                   </span>
                 )}
               </div>
 
-              <div className="flex items-center gap-4 text-xs text-slate-500 font-medium mt-1 flex-wrap">
+              <div
+                className={`flex items-center gap-4 text-xs font-medium mt-1 flex-wrap ${
+                  doctorDarkMode ? 'text-slate-400' : 'text-slate-500'
+                }`}
+              >
                 <span>Phone: {patient.phone}</span>
                 {patient.abhaId && <span>ABHA: {patient.abhaId}</span>}
                 <span>Kiosk Mode: {patient.inputMode.toUpperCase()} ({patient.language.toUpperCase()})</span>
                 <span>Intake: {patient.timestamp}</span>
                 {patient.consultationTime && (
-                  <span className="font-bold text-emerald-800">
+                  <span className={doctorDarkMode ? 'font-bold text-emerald-400' : 'font-bold text-emerald-800'}>
                     • Consulted at {patient.consultationTime}
                   </span>
                 )}
@@ -246,10 +290,14 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               type="button"
               disabled={isGeneratingSummary}
               onClick={handleRegenerate}
-              className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-60"
+              className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-60 border ${
+                doctorDarkMode
+                  ? 'bg-indigo-950/80 hover:bg-indigo-900/90 text-indigo-200 border-indigo-700'
+                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border-indigo-200'
+              }`}
               title="Re-query Gemini with interview transcript & extracted document JSON"
             >
-              <RotateCw className={`w-4 h-4 text-indigo-700 ${isGeneratingSummary ? 'animate-spin' : ''}`} />
+              <RotateCw className={`w-4 h-4 ${doctorDarkMode ? 'text-indigo-400' : 'text-indigo-700'} ${isGeneratingSummary ? 'animate-spin' : ''}`} />
               <span>{isGeneratingSummary ? 'Generating AI Summary...' : 'Regenerate Summary'}</span>
             </button>
 
@@ -259,7 +307,11 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               onClick={() => setIsEditing(!isEditing)}
               className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border cursor-pointer transition-colors ${
                 isEditing
-                  ? 'bg-amber-100 text-amber-900 border-amber-400'
+                  ? doctorDarkMode
+                    ? 'bg-amber-950 text-amber-200 border-amber-500'
+                    : 'bg-amber-100 text-amber-900 border-amber-400'
+                  : doctorDarkMode
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
                   : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
               }`}
             >
@@ -268,12 +320,31 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
             </button>
 
             <button
+              id="btn-print-summary-pdf"
+              type="button"
+              onClick={() => setIsPrintSummaryOpen(true)}
+              className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer border transition-colors shadow-xs ${
+                doctorDarkMode
+                  ? 'bg-cyan-950/90 hover:bg-cyan-900 text-cyan-200 border-cyan-700'
+                  : 'bg-cyan-50 hover:bg-cyan-100 text-cyan-900 border-cyan-300'
+              }`}
+              title="Generate a print-ready 1-page clinical intake summary & PDF export"
+            >
+              <Printer className={`w-4 h-4 ${doctorDarkMode ? 'text-cyan-400' : 'text-cyan-700'}`} />
+              <span>Print / PDF Summary</span>
+            </button>
+
+            <button
               id="btn-print-opd-rx"
               type="button"
               onClick={() => setIsRxModalOpen(true)}
-              className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer"
+              className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer border ${
+                doctorDarkMode
+                  ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-800 border-slate-300'
+              }`}
             >
-              <Printer className="w-4 h-4 text-slate-700" />
+              <FileSpreadsheet className={`w-4 h-4 ${doctorDarkMode ? 'text-slate-400' : 'text-slate-700'}`} />
               <span>Print Rx Slip</span>
             </button>
 
@@ -282,7 +353,11 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               id="btn-accept-save-emr"
               type="button"
               onClick={handleSaveEMR}
-              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs flex items-center gap-2 cursor-pointer transition-transform active:scale-95"
+              className={`px-4 py-2.5 font-bold text-xs sm:text-sm rounded-xl shadow-xs flex items-center gap-2 cursor-pointer transition-transform active:scale-95 ${
+                doctorDarkMode
+                  ? 'bg-cyan-700 hover:bg-cyan-600 text-white ring-1 ring-cyan-400'
+                  : 'bg-slate-800 hover:bg-slate-900 text-white'
+              }`}
             >
               <Save className="w-4 h-4" />
               <span>Accept & Save to EMR</span>
@@ -303,7 +378,11 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   type="button"
                   id="btn-reopen-to-queue"
                   onClick={handleReopenToQueue}
-                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 flex items-center gap-1 cursor-pointer"
+                  className={`px-3 py-2 font-bold text-xs rounded-xl border flex items-center gap-1 cursor-pointer ${
+                    doctorDarkMode
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-750'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
+                  }`}
                   title="Move back to Active Queue"
                 >
                   <Undo2 className="w-3.5 h-3.5" />
@@ -326,31 +405,55 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
         </div>
 
         {/* AI Generation Source & Safety Badge */}
-        <div className="p-3 bg-gradient-to-r from-cyan-50 to-indigo-50 border border-cyan-200/80 rounded-xl flex items-center justify-between gap-3 text-xs text-slate-700 font-semibold flex-wrap">
+        <div
+          className={`p-3 border rounded-xl flex items-center justify-between gap-3 text-xs font-semibold flex-wrap ${
+            doctorDarkMode
+              ? 'bg-slate-950/80 border-slate-800 text-slate-300'
+              : 'bg-gradient-to-r from-cyan-50 to-indigo-50 border-cyan-200/80 text-slate-700'
+          }`}
+        >
           <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+            <Sparkles className={`w-4 h-4 ${doctorDarkMode ? 'text-cyan-400' : 'text-indigo-600'} shrink-0`} />
             <span>
               <strong>Gemini-Powered Physician Summary</strong> ({modelUsed}): Strictly factual intake report synthesized from patient interview & uploaded records.
             </span>
           </div>
-          <div className="flex items-center gap-1 text-[11px] text-slate-500 font-medium bg-white/80 px-2.5 py-1 rounded-md border border-slate-200">
-            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+          <div
+            className={`flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-md border ${
+              doctorDarkMode
+                ? 'bg-slate-900 border-slate-750 text-slate-300'
+                : 'bg-white/80 border-slate-200 text-slate-500'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
             <span>Clinical Rule: Zero Speculative Diagnoses</span>
           </div>
         </div>
 
         {/* Feedback Banners */}
         {savedSuccess && (
-          <div className="p-3 bg-blue-50 border border-blue-300 rounded-xl flex items-center gap-2 text-xs sm:text-sm font-bold text-blue-900 animate-fadeIn">
-            <CheckCircle2 className="w-5 h-5 text-blue-700 shrink-0" />
+          <div
+            className={`p-3 border rounded-xl flex items-center gap-2 text-xs sm:text-sm font-bold animate-fadeIn ${
+              doctorDarkMode
+                ? 'bg-blue-950/80 border-blue-700 text-blue-200'
+                : 'bg-blue-50 border-blue-300 text-blue-900'
+            }`}
+          >
+            <CheckCircle2 className="w-5 h-5 text-blue-500 shrink-0" />
             <span>Clinical history verified & committed to Hospital Electronic Medical Record (EMR).</span>
           </div>
         )}
 
         {diagnosedSuccess && (
-          <div className="p-3.5 bg-emerald-50 border-2 border-emerald-400 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm font-bold text-emerald-950 animate-fadeIn">
+          <div
+            className={`p-3.5 border-2 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm font-bold animate-fadeIn ${
+              doctorDarkMode
+                ? 'bg-emerald-950/80 border-emerald-600 text-emerald-200'
+                : 'bg-emerald-50 border-emerald-400 text-emerald-950'
+            }`}
+          >
             <div className="flex items-center gap-2.5">
-              <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" />
+              <CheckCircle2 className="w-5 h-5 text-emerald-500 shrink-0" />
               <span>
                 Patient consultation is marked as <strong>Diagnosed & Treated</strong> and moved to <strong>Today's Patients</strong> archive.
               </span>
@@ -358,7 +461,7 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
             <button
               type="button"
               onClick={onBackToQueue}
-              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-black self-start sm:self-auto cursor-pointer"
+              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-black self-start sm:self-auto cursor-pointer"
             >
               Return to Queue
             </button>
@@ -367,13 +470,23 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
 
         {/* Priority Clinical Warning Flags Banner */}
         {hasRedFlags && (
-          <div className="p-4 bg-red-50 border-2 border-red-400 rounded-xl flex items-start gap-3 text-red-950">
-            <AlertTriangle className="w-6 h-6 text-red-600 shrink-0 mt-0.5" />
+          <div
+            className={`p-4 border-2 rounded-xl flex items-start gap-3 ${
+              doctorDarkMode
+                ? 'bg-[#2A0E14] border-red-500 text-red-200'
+                : 'bg-red-50 border-red-400 text-red-950'
+            }`}
+          >
+            <AlertTriangle className="w-6 h-6 text-red-500 shrink-0 mt-0.5" />
             <div className="space-y-1">
-              <span className="font-black text-sm uppercase tracking-wider text-red-700 block">
+              <span
+                className={`font-black text-sm uppercase tracking-wider block ${
+                  doctorDarkMode ? 'text-red-400' : 'text-red-700'
+                }`}
+              >
                 PRIORITY CLINICAL WARNING FLAGS (MATCHED RULE SET):
               </span>
-              <p className="text-xs text-red-900 font-medium">
+              <p className={`text-xs font-medium ${doctorDarkMode ? 'text-red-300' : 'text-red-900'}`}>
                 The following urgent symptom combination was matched by the clinical intake safety engine during interview:
               </p>
               <div className="flex flex-wrap gap-2 mt-1.5">
@@ -395,20 +508,44 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* LEFT COLUMN: Structured History (7 Cols) */}
         <div className="lg:col-span-7 space-y-4">
-          <div className="bg-white rounded-2xl p-6 border-2 border-slate-300 shadow-sm space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <div className="flex items-center gap-2 text-base font-extrabold text-slate-900">
-                <Stethoscope className="w-5 h-5 text-cyan-800" />
+          <div
+            className={`rounded-2xl p-6 border-2 shadow-sm space-y-5 transition-colors ${
+              doctorDarkMode
+                ? 'bg-slate-900 border-slate-700 text-white'
+                : 'bg-white border-slate-300 text-slate-900'
+            }`}
+          >
+            <div
+              className={`flex items-center justify-between pb-3 border-b ${
+                doctorDarkMode ? 'border-slate-800' : 'border-slate-200'
+              }`}
+            >
+              <div
+                className={`flex items-center gap-2 text-base font-extrabold ${
+                  doctorDarkMode ? 'text-white' : 'text-slate-900'
+                }`}
+              >
+                <Stethoscope className={`w-5 h-5 ${doctorDarkMode ? 'text-cyan-400' : 'text-cyan-800'}`} />
                 <span>Physician-Facing Intake Summary (SOAP Format)</span>
               </div>
-              <span className="text-xs text-slate-500 font-medium">
+              <span className={`text-xs font-medium ${doctorDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                 {isEditing ? 'Click any field to edit directly' : 'Inline fields locked (click Edit Summary to modify)'}
               </span>
             </div>
 
             {/* 1. Chief Complaint */}
-            <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-600 block">
+            <div
+              className={`p-4 rounded-xl space-y-1.5 border transition-colors ${
+                doctorDarkMode
+                  ? 'bg-slate-850 border-slate-750'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <label
+                className={`text-xs font-black uppercase tracking-wider block ${
+                  doctorDarkMode ? 'text-slate-400' : 'text-slate-600'
+                }`}
+              >
                 1. Chief Complaint (Pradhana Lakshana)
               </label>
               {isEditing ? (
@@ -417,16 +554,32 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   type="text"
                   value={chiefComplaint}
                   onChange={(e) => setChiefComplaint(e.target.value)}
-                  className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-bold text-slate-900"
+                  className={`w-full p-2.5 border-2 rounded-lg text-sm font-bold ${
+                    doctorDarkMode
+                      ? 'bg-slate-900 border-cyan-500 text-white'
+                      : 'bg-white border-cyan-600 text-slate-900'
+                  }`}
                 />
               ) : (
-                <p className="text-base font-extrabold text-slate-950">{chiefComplaint}</p>
+                <p className={`text-base font-extrabold ${doctorDarkMode ? 'text-white' : 'text-slate-950'}`}>
+                  {chiefComplaint}
+                </p>
               )}
             </div>
 
             {/* 2. History of Present Illness (HPI) */}
-            <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-600 block">
+            <div
+              className={`p-4 rounded-xl space-y-1.5 border transition-colors ${
+                doctorDarkMode
+                  ? 'bg-slate-850 border-slate-750'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <label
+                className={`text-xs font-black uppercase tracking-wider block ${
+                  doctorDarkMode ? 'text-slate-400' : 'text-slate-600'
+                }`}
+              >
                 2. History of Present Illness (HPI / Rogotpatthi)
               </label>
               {isEditing ? (
@@ -435,42 +588,90 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   rows={3}
                   value={hpiText}
                   onChange={(e) => setHpiText(e.target.value)}
-                  className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
+                  className={`w-full p-2.5 border-2 rounded-lg text-sm font-medium ${
+                    doctorDarkMode
+                      ? 'bg-slate-900 border-cyan-500 text-white'
+                      : 'bg-white border-cyan-600 text-slate-900'
+                  }`}
                 />
               ) : (
-                <p className="text-sm font-medium text-slate-800 leading-relaxed">{hpiText}</p>
+                <p className={`text-sm font-medium leading-relaxed ${doctorDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+                  {hpiText}
+                </p>
               )}
             </div>
 
             {/* AYUSH Specific Assessment if AYUSH department */}
             {isAyush && (
-              <div className="p-4 bg-emerald-50/70 border-2 border-emerald-300 rounded-xl space-y-3">
-                <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-emerald-900">
-                  <Sparkles className="w-4 h-4 text-emerald-700" />
+              <div
+                className={`p-4 border-2 rounded-xl space-y-3 transition-colors ${
+                  doctorDarkMode
+                    ? 'bg-[#062018] border-emerald-800 text-emerald-200'
+                    : 'bg-emerald-50/70 border-emerald-300 text-emerald-950'
+                }`}
+              >
+                <div
+                  className={`flex items-center gap-2 text-xs font-black uppercase tracking-wider ${
+                    doctorDarkMode ? 'text-emerald-300' : 'text-emerald-900'
+                  }`}
+                >
+                  <Sparkles className={`w-4 h-4 ${doctorDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`} />
                   <span>Ayurvedic Assessment (Dashavidha Pariksha & Agni)</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
-                    <span className="text-slate-500 font-bold block">Prakriti:</span>
-                    <span className="font-extrabold text-emerald-950">
+                  <div
+                    className={`p-2.5 rounded-lg border ${
+                      doctorDarkMode
+                        ? 'bg-slate-900 border-emerald-800'
+                        : 'bg-white border-emerald-200'
+                    }`}
+                  >
+                    <span className={doctorDarkMode ? 'text-slate-400 font-bold block' : 'text-slate-500 font-bold block'}>
+                      Prakriti:
+                    </span>
+                    <span className={`font-extrabold ${doctorDarkMode ? 'text-emerald-300' : 'text-emerald-950'}`}>
                       {patient.ayushAssessment?.prakriti || 'Vata-Kapha Pradhana'}
                     </span>
                   </div>
-                  <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
-                    <span className="text-slate-500 font-bold block">Jatharagni:</span>
-                    <span className="font-extrabold text-emerald-950">
+                  <div
+                    className={`p-2.5 rounded-lg border ${
+                      doctorDarkMode
+                        ? 'bg-slate-900 border-emerald-800'
+                        : 'bg-white border-emerald-200'
+                    }`}
+                  >
+                    <span className={doctorDarkMode ? 'text-slate-400 font-bold block' : 'text-slate-500 font-bold block'}>
+                      Jatharagni:
+                    </span>
+                    <span className={`font-extrabold ${doctorDarkMode ? 'text-emerald-300' : 'text-emerald-950'}`}>
                       {patient.ayushAssessment?.agni || 'Mandagni (Sluggish Digestion)'}
                     </span>
                   </div>
-                  <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
-                    <span className="text-slate-500 font-bold block">Kostha:</span>
-                    <span className="font-extrabold text-emerald-950">
+                  <div
+                    className={`p-2.5 rounded-lg border ${
+                      doctorDarkMode
+                        ? 'bg-slate-900 border-emerald-800'
+                        : 'bg-white border-emerald-200'
+                    }`}
+                  >
+                    <span className={doctorDarkMode ? 'text-slate-400 font-bold block' : 'text-slate-500 font-bold block'}>
+                      Kostha:
+                    </span>
+                    <span className={`font-extrabold ${doctorDarkMode ? 'text-emerald-300' : 'text-emerald-950'}`}>
                       {patient.ayushAssessment?.kostha || 'Krura Kostha (Hard Bowels)'}
                     </span>
                   </div>
-                  <div className="p-2.5 bg-white rounded-lg border border-emerald-200">
-                    <span className="text-slate-500 font-bold block">Rogibala:</span>
-                    <span className="font-extrabold text-emerald-950">
+                  <div
+                    className={`p-2.5 rounded-lg border ${
+                      doctorDarkMode
+                        ? 'bg-slate-900 border-emerald-800'
+                        : 'bg-white border-emerald-200'
+                    }`}
+                  >
+                    <span className={doctorDarkMode ? 'text-slate-400 font-bold block' : 'text-slate-500 font-bold block'}>
+                      Rogibala:
+                    </span>
+                    <span className={`font-extrabold ${doctorDarkMode ? 'text-emerald-300' : 'text-emerald-950'}`}>
                       {patient.ayushAssessment?.bala || 'Madhyama Rogibala'}
                     </span>
                   </div>
@@ -481,10 +682,20 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                     value={ayushNotes}
                     onChange={(e) => setAyushNotes(e.target.value)}
                     placeholder="Ayurvedic clinical observations & Samprapti notes..."
-                    className="w-full p-2.5 bg-white border border-emerald-300 rounded-lg text-xs font-medium text-slate-900"
+                    className={`w-full p-2.5 border rounded-lg text-xs font-medium ${
+                      doctorDarkMode
+                        ? 'bg-slate-900 border-emerald-600 text-white'
+                        : 'bg-white border-emerald-300 text-slate-900'
+                    }`}
                   />
                 ) : ayushNotes ? (
-                  <p className="text-xs text-emerald-950 bg-white/70 p-2.5 rounded-lg border border-emerald-200 font-medium">
+                  <p
+                    className={`text-xs p-2.5 rounded-lg border font-medium ${
+                      doctorDarkMode
+                        ? 'text-emerald-200 bg-slate-900/90 border-emerald-800'
+                        : 'text-emerald-950 bg-white/70 border-emerald-200'
+                    }`}
+                  >
                     {ayushNotes}
                   </p>
                 ) : null}
@@ -492,8 +703,18 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
             )}
 
             {/* 3. Past Medical & Surgical History */}
-            <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-600 block">
+            <div
+              className={`p-4 rounded-xl space-y-1.5 border transition-colors ${
+                doctorDarkMode
+                  ? 'bg-slate-850 border-slate-750'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <label
+                className={`text-xs font-black uppercase tracking-wider block ${
+                  doctorDarkMode ? 'text-slate-400' : 'text-slate-600'
+                }`}
+              >
                 3. Past Medical & Surgical History (Purva Vyadhi)
               </label>
               {isEditing ? (
@@ -502,17 +723,33 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   rows={2}
                   value={pastHistoryText}
                   onChange={(e) => setPastHistoryText(e.target.value)}
-                  className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
+                  className={`w-full p-2.5 border-2 rounded-lg text-sm font-medium ${
+                    doctorDarkMode
+                      ? 'bg-slate-900 border-cyan-500 text-white'
+                      : 'bg-white border-cyan-600 text-slate-900'
+                  }`}
                 />
               ) : (
-                <p className="text-sm font-medium text-slate-800 leading-relaxed">{pastHistoryText}</p>
+                <p className={`text-sm font-medium leading-relaxed ${doctorDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+                  {pastHistoryText}
+                </p>
               )}
             </div>
 
             {/* 4. Drug & Allergies */}
-            <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                <Pill className="w-4 h-4 text-rose-600" />
+            <div
+              className={`p-4 rounded-xl space-y-1.5 border transition-colors ${
+                doctorDarkMode
+                  ? 'bg-slate-850 border-slate-750'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <label
+                className={`text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${
+                  doctorDarkMode ? 'text-slate-400' : 'text-slate-600'
+                }`}
+              >
+                <Pill className="w-4 h-4 text-rose-500" />
                 <span>4. Drug Allergies & Current Medications (Oushadha)</span>
               </label>
               {isEditing ? (
@@ -521,19 +758,39 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   rows={2}
                   value={drugAllergyText}
                   onChange={(e) => setDrugAllergyText(e.target.value)}
-                  className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
+                  className={`w-full p-2.5 border-2 rounded-lg text-sm font-medium ${
+                    doctorDarkMode
+                      ? 'bg-slate-900 border-rose-500 text-white'
+                      : 'bg-white border-cyan-600 text-slate-900'
+                  }`}
                 />
               ) : (
-                <p className="text-sm font-semibold text-rose-900 leading-relaxed bg-rose-50/60 p-2.5 rounded-lg border border-rose-200">
+                <p
+                  className={`text-sm font-semibold leading-relaxed p-2.5 rounded-lg border ${
+                    doctorDarkMode
+                      ? 'bg-rose-950/60 text-rose-200 border-rose-800'
+                      : 'bg-rose-50/60 text-rose-900 border-rose-200'
+                  }`}
+                >
                   {drugAllergyText}
                 </p>
               )}
             </div>
 
             {/* 5. Family History */}
-            <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
-                <Heart className="w-4 h-4 text-indigo-600" />
+            <div
+              className={`p-4 rounded-xl space-y-1.5 border transition-colors ${
+                doctorDarkMode
+                  ? 'bg-slate-850 border-slate-750'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <label
+                className={`text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${
+                  doctorDarkMode ? 'text-slate-400' : 'text-slate-600'
+                }`}
+              >
+                <Heart className="w-4 h-4 text-indigo-400" />
                 <span>5. Family History (Kula Vrittanta)</span>
               </label>
               {isEditing ? (
@@ -542,16 +799,32 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   rows={2}
                   value={familyHistoryText}
                   onChange={(e) => setFamilyHistoryText(e.target.value)}
-                  className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
+                  className={`w-full p-2.5 border-2 rounded-lg text-sm font-medium ${
+                    doctorDarkMode
+                      ? 'bg-slate-900 border-cyan-500 text-white'
+                      : 'bg-white border-cyan-600 text-slate-900'
+                  }`}
                 />
               ) : (
-                <p className="text-sm font-medium text-slate-800 leading-relaxed">{familyHistoryText}</p>
+                <p className={`text-sm font-medium leading-relaxed ${doctorDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+                  {familyHistoryText}
+                </p>
               )}
             </div>
 
             {/* 6. Personal History */}
-            <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-600 block">
+            <div
+              className={`p-4 rounded-xl space-y-1.5 border transition-colors ${
+                doctorDarkMode
+                  ? 'bg-slate-850 border-slate-750'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <label
+                className={`text-xs font-black uppercase tracking-wider block ${
+                  doctorDarkMode ? 'text-slate-400' : 'text-slate-600'
+                }`}
+              >
                 6. Personal & Lifestyle History (Swabhava & Ahar-Vihar)
               </label>
               {isEditing ? (
@@ -560,16 +833,32 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   rows={2}
                   value={personalHistoryText}
                   onChange={(e) => setPersonalHistoryText(e.target.value)}
-                  className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
+                  className={`w-full p-2.5 border-2 rounded-lg text-sm font-medium ${
+                    doctorDarkMode
+                      ? 'bg-slate-900 border-cyan-500 text-white'
+                      : 'bg-white border-cyan-600 text-slate-900'
+                  }`}
                 />
               ) : (
-                <p className="text-sm font-medium text-slate-800 leading-relaxed">{personalHistoryText}</p>
+                <p className={`text-sm font-medium leading-relaxed ${doctorDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+                  {personalHistoryText}
+                </p>
               )}
             </div>
 
             {/* 7. Review of Systems (ROS) */}
-            <div className="p-4 bg-slate-50 rounded-xl space-y-1.5 border border-slate-200">
-              <label className="text-xs font-black uppercase tracking-wider text-slate-600 block">
+            <div
+              className={`p-4 rounded-xl space-y-1.5 border transition-colors ${
+                doctorDarkMode
+                  ? 'bg-slate-850 border-slate-750'
+                  : 'bg-slate-50 border-slate-200'
+              }`}
+            >
+              <label
+                className={`text-xs font-black uppercase tracking-wider block ${
+                  doctorDarkMode ? 'text-slate-400' : 'text-slate-600'
+                }`}
+              >
                 7. Review of Systems (ROS / Sarva Anga Pariksha)
               </label>
               {isEditing ? (
@@ -578,17 +867,33 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   rows={2}
                   value={rosText}
                   onChange={(e) => setRosText(e.target.value)}
-                  className="w-full p-2.5 bg-white border-2 border-cyan-600 rounded-lg text-sm font-medium text-slate-900"
+                  className={`w-full p-2.5 border-2 rounded-lg text-sm font-medium ${
+                    doctorDarkMode
+                      ? 'bg-slate-900 border-cyan-500 text-white'
+                      : 'bg-white border-cyan-600 text-slate-900'
+                  }`}
                 />
               ) : (
-                <p className="text-sm font-medium text-slate-800 leading-relaxed">{rosText}</p>
+                <p className={`text-sm font-medium leading-relaxed ${doctorDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>
+                  {rosText}
+                </p>
               )}
             </div>
 
             {/* Physician Consultation Clinical Notes */}
-            <div className="p-4 bg-cyan-50/60 rounded-xl space-y-2 border-2 border-cyan-300">
-              <label className="text-xs font-black uppercase tracking-wider text-cyan-950 flex items-center gap-1.5">
-                <UserCheck className="w-4 h-4 text-cyan-800" />
+            <div
+              className={`p-4 rounded-xl space-y-2 border-2 transition-colors ${
+                doctorDarkMode
+                  ? 'bg-[#0B2533] border-cyan-700'
+                  : 'bg-cyan-50/60 border-cyan-300'
+              }`}
+            >
+              <label
+                className={`text-xs font-black uppercase tracking-wider flex items-center gap-1.5 ${
+                  doctorDarkMode ? 'text-cyan-300' : 'text-cyan-950'
+                }`}
+              >
+                <UserCheck className={`w-4 h-4 ${doctorDarkMode ? 'text-cyan-400' : 'text-cyan-800'}`} />
                 <span>Physician Consultation Notes & Treatment Plan:</span>
               </label>
               <textarea
@@ -597,18 +902,26 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                 value={physicianNotes}
                 onChange={(e) => setPhysicianNotes(e.target.value)}
                 placeholder="Type examination findings, Rx prescription, or diagnostic orders here..."
-                className="w-full p-3 bg-white rounded-lg border-2 border-cyan-400 text-sm font-medium text-slate-900 focus:ring-4 focus:ring-cyan-100"
+                className={`w-full p-3 rounded-lg border-2 text-sm font-medium ${
+                  doctorDarkMode
+                    ? 'bg-slate-900 border-cyan-500 text-white placeholder-slate-500 focus:ring-4 focus:ring-cyan-900/50'
+                    : 'bg-white border-cyan-400 text-slate-900 focus:ring-4 focus:ring-cyan-100'
+                }`}
               />
 
               <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
-                <span className="text-[11px] text-slate-500 font-medium">
+                <span className={`text-[11px] font-medium ${doctorDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                   {isCompleted ? '✓ Consultation marked complete and archived in Today’s Patients' : 'Consultation in progress'}
                 </span>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={handleSaveEMR}
-                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer ${
+                      doctorDarkMode
+                        ? 'bg-slate-800 hover:bg-slate-700 text-white border border-slate-650'
+                        : 'bg-slate-800 hover:bg-slate-900 text-white'
+                    }`}
                   >
                     <Save className="w-3.5 h-3.5" />
                     <span>Save Notes</span>
@@ -633,34 +946,76 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
         {/* RIGHT COLUMN: Vitals + Digitized Document Timeline (5 Cols) */}
         <div className="lg:col-span-5 space-y-4">
           {/* Vitals Summary Card */}
-          <div className="bg-white rounded-2xl p-5 border-2 border-slate-300 shadow-sm space-y-3">
-            <div className="flex items-center gap-2 text-sm font-extrabold text-slate-900">
-              <Activity className="w-5 h-5 text-rose-600" />
+          <div
+            className={`rounded-2xl p-5 border-2 shadow-sm space-y-3 transition-colors ${
+              doctorDarkMode
+                ? 'bg-slate-900 border-slate-700 text-white'
+                : 'bg-white border-slate-300 text-slate-900'
+            }`}
+          >
+            <div
+              className={`flex items-center gap-2 text-sm font-extrabold ${
+                doctorDarkMode ? 'text-white' : 'text-slate-900'
+              }`}
+            >
+              <Activity className="w-5 h-5 text-rose-500" />
               <span>Triage Recorded Vitals</span>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-2 gap-2 text-xs">
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                <span className="text-slate-500 font-bold block">Blood Pressure</span>
-                <span className="text-base font-black text-slate-900">
+              <div
+                className={`p-3 rounded-xl border ${
+                  doctorDarkMode
+                    ? 'bg-slate-850 border-slate-750'
+                    : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <span className={doctorDarkMode ? 'text-slate-400 font-bold block' : 'text-slate-500 font-bold block'}>
+                  Blood Pressure
+                </span>
+                <span className={`text-base font-black ${doctorDarkMode ? 'text-white' : 'text-slate-900'}`}>
                   {patient.vitals?.bp || '124/80 mmHg'}
                 </span>
               </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                <span className="text-slate-500 font-bold block">Pulse Rate</span>
-                <span className="text-base font-black text-slate-900">
+              <div
+                className={`p-3 rounded-xl border ${
+                  doctorDarkMode
+                    ? 'bg-slate-850 border-slate-750'
+                    : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <span className={doctorDarkMode ? 'text-slate-400 font-bold block' : 'text-slate-500 font-bold block'}>
+                  Pulse Rate
+                </span>
+                <span className={`text-base font-black ${doctorDarkMode ? 'text-white' : 'text-slate-900'}`}>
                   {patient.vitals?.pulse || '76 bpm'}
                 </span>
               </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                <span className="text-slate-500 font-bold block">Temperature</span>
-                <span className="text-base font-black text-slate-900">
+              <div
+                className={`p-3 rounded-xl border ${
+                  doctorDarkMode
+                    ? 'bg-slate-850 border-slate-750'
+                    : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <span className={doctorDarkMode ? 'text-slate-400 font-bold block' : 'text-slate-500 font-bold block'}>
+                  Temperature
+                </span>
+                <span className={`text-base font-black ${doctorDarkMode ? 'text-white' : 'text-slate-900'}`}>
                   {patient.vitals?.temp || '98.4 °F'}
                 </span>
               </div>
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                <span className="text-slate-500 font-bold block">SpO2 Oxygen</span>
-                <span className="text-base font-black text-emerald-700">
+              <div
+                className={`p-3 rounded-xl border ${
+                  doctorDarkMode
+                    ? 'bg-slate-850 border-slate-750'
+                    : 'bg-slate-50 border-slate-200'
+                }`}
+              >
+                <span className={doctorDarkMode ? 'text-slate-400 font-bold block' : 'text-slate-500 font-bold block'}>
+                  SpO2 Oxygen
+                </span>
+                <span className={`text-base font-black ${doctorDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>
                   {patient.vitals?.spo2 || '98%'}
                 </span>
               </div>
@@ -668,10 +1023,24 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
           </div>
 
           {/* Document Timeline Alongside */}
-          <div className="bg-white rounded-2xl p-5 border-2 border-slate-300 shadow-sm space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-              <div className="flex items-center gap-2 text-sm font-extrabold text-slate-900">
-                <FileText className="w-5 h-5 text-cyan-800" />
+          <div
+            className={`rounded-2xl p-5 border-2 shadow-sm space-y-4 transition-colors ${
+              doctorDarkMode
+                ? 'bg-slate-900 border-slate-700 text-white'
+                : 'bg-white border-slate-300 text-slate-900'
+            }`}
+          >
+            <div
+              className={`flex items-center justify-between pb-2 border-b ${
+                doctorDarkMode ? 'border-slate-800' : 'border-slate-200'
+              }`}
+            >
+              <div
+                className={`flex items-center gap-2 text-sm font-extrabold ${
+                  doctorDarkMode ? 'text-white' : 'text-slate-900'
+                }`}
+              >
+                <FileText className={`w-5 h-5 ${doctorDarkMode ? 'text-cyan-400' : 'text-cyan-800'}`} />
                 <span>Digitized Document Timeline ({patient.scannedDocs?.length || 0})</span>
               </div>
             </div>
@@ -687,9 +1056,15 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                 ))}
               </div>
             ) : (
-              <div className="p-8 bg-slate-50 border-2 border-dashed border-slate-300 rounded-2xl text-center space-y-2">
-                <FileText className="w-8 h-8 text-slate-400 mx-auto" />
-                <p className="text-xs text-slate-600 font-medium">
+              <div
+                className={`p-8 border-2 border-dashed rounded-2xl text-center space-y-2 transition-colors ${
+                  doctorDarkMode
+                    ? 'bg-slate-850 border-slate-750'
+                    : 'bg-slate-50 border-slate-300'
+                }`}
+              >
+                <FileText className={`w-8 h-8 mx-auto ${doctorDarkMode ? 'text-slate-600' : 'text-slate-400'}`} />
+                <p className={`text-xs font-medium ${doctorDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
                   No prior medical documents uploaded during kiosk intake.
                 </p>
               </div>
@@ -700,24 +1075,46 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
 
       {/* Rx Prescription Modal Dialog */}
       {isRxModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
-          <div className="bg-white w-full max-w-xl rounded-2xl p-6 border-2 border-slate-400 space-y-4 shadow-2xl">
-            <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-                <Printer className="w-5 h-5 text-cyan-800" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div
+            className={`w-full max-w-xl rounded-2xl p-6 border-2 space-y-4 shadow-2xl transition-colors ${
+              doctorDarkMode
+                ? 'bg-slate-900 border-slate-700 text-white'
+                : 'bg-white border-slate-400 text-slate-900'
+            }`}
+          >
+            <div
+              className={`flex items-center justify-between border-b pb-3 ${
+                doctorDarkMode ? 'border-slate-800' : 'border-slate-200'
+              }`}
+            >
+              <h3
+                className={`text-lg font-bold flex items-center gap-2 ${
+                  doctorDarkMode ? 'text-white' : 'text-slate-900'
+                }`}
+              >
+                <FileSpreadsheet className={`w-5 h-5 ${doctorDarkMode ? 'text-cyan-400' : 'text-cyan-800'}`} />
                 <span>Print Official OPD Prescription Slip</span>
               </h3>
               <button
                 type="button"
                 onClick={() => setIsRxModalOpen(false)}
-                className="text-slate-500 hover:text-slate-800 text-sm font-bold"
+                className={`text-sm font-bold cursor-pointer ${
+                  doctorDarkMode ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-800'
+                }`}
               >
                 ✕
               </button>
             </div>
 
-            <div className="p-4 bg-slate-50 rounded-xl space-y-2 text-xs text-slate-800 font-medium">
-              <p><strong>Hospital:</strong> All India Institute of Medical Sciences / OPD Wing</p>
+            <div
+              className={`p-4 rounded-xl space-y-2 text-xs font-medium ${
+                doctorDarkMode
+                  ? 'bg-slate-800 text-slate-200 border border-slate-700'
+                  : 'bg-slate-50 text-slate-800'
+              }`}
+            >
+              <p><strong>Hospital:</strong> Apex Medical & Ayush Research Hospital / OPD Wing</p>
               <p><strong>Consultant:</strong> {loggedInDoctor?.name || 'Dr. Rajesh Sharma, MD'}</p>
               <p><strong>Patient:</strong> {patient.name} ({patient.age}Y/{patient.gender}) • Token: {patient.tokenNumber}</p>
               <p><strong>Chief Complaint:</strong> {chiefComplaint}</p>
@@ -729,7 +1126,11 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               <button
                 type="button"
                 onClick={() => setIsRxModalOpen(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs"
+                className={`px-4 py-2 font-bold rounded-lg text-xs cursor-pointer ${
+                  doctorDarkMode
+                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                }`}
               >
                 Close
               </button>
@@ -739,7 +1140,7 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                   window.print();
                   setIsRxModalOpen(false);
                 }}
-                className="px-5 py-2 bg-cyan-800 hover:bg-cyan-900 text-white font-bold rounded-lg text-xs flex items-center gap-1.5"
+                className="px-5 py-2 bg-cyan-700 hover:bg-cyan-600 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
                 <Printer className="w-4 h-4" />
                 <span>Send to OPD Printer</span>
@@ -747,6 +1148,26 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Comprehensive 1-Page Clinical Summary & PDF Print Modal */}
+      {isPrintSummaryOpen && (
+        <PrintableClinicalSummary
+          patient={patient}
+          doctor={loggedInDoctor}
+          chiefComplaint={chiefComplaint}
+          hpiText={hpiText}
+          pastHistoryText={pastHistoryText}
+          drugAllergyText={drugAllergyText}
+          familyHistoryText={familyHistoryText}
+          personalHistoryText={personalHistoryText}
+          rosText={rosText}
+          ayushNotes={ayushNotes}
+          physicianNotes={physicianNotes}
+          hasRedFlags={hasRedFlags}
+          onClose={() => setIsPrintSummaryOpen(false)}
+          doctorDarkMode={doctorDarkMode}
+        />
       )}
     </div>
   );

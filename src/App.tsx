@@ -23,15 +23,22 @@ const AppContent: React.FC = () => {
     setLoggedInDoctor,
     activeDoctorPatient,
     setActiveDoctorPatient,
+    doctorDarkMode,
   } = useApp();
+
+  const isDoctorDark = appView === 'doctor' && doctorDarkMode;
 
   return (
     <div
       id="app-root-container"
-      className="min-h-screen flex flex-col font-sans transition-colors duration-300 antialiased selection:bg-cyan-200 selection:text-cyan-900"
+      className={`min-h-screen flex flex-col font-sans transition-colors duration-300 antialiased ${
+        isDoctorDark
+          ? 'dark bg-[#0B0F17] text-slate-100 selection:bg-cyan-900 selection:text-cyan-200'
+          : 'selection:bg-cyan-200 selection:text-cyan-900'
+      }`}
       style={{
-        backgroundColor: theme.colors.bgPage,
-        color: theme.colors.textPrimary,
+        backgroundColor: isDoctorDark ? '#0B0F17' : theme.colors.bgPage,
+        color: isDoctorDark ? '#F8FAFC' : theme.colors.textPrimary,
         fontFamily: theme.fonts?.body || 'inherit',
       }}
     >
@@ -80,12 +87,23 @@ const AppContent: React.FC = () => {
       <EmergencyModal />
 
       {/* Footer Accessibility / OPD Compliance Strip */}
-      <footer className="w-full border-t border-slate-200/80 bg-white/60 backdrop-blur-xs py-3 px-4 text-center text-xs text-slate-500 font-medium">
+      <footer
+        className={`w-full border-t py-3 px-4 text-center text-xs font-medium transition-colors ${
+          isDoctorDark
+            ? 'border-slate-800 bg-[#0F172A]/90 text-slate-400'
+            : 'border-slate-200/80 bg-white/60 backdrop-blur-xs text-slate-500'
+        }`}
+      >
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
           <span>
-            Swasthya AI • National Health Mission & AIIMS OPD Kiosk Spec v2.4
+            Swasthya AI • Built by team eternals ♡
           </span>
           <span className="flex items-center gap-3">
+            {isDoctorDark && (
+              <span className="text-cyan-400 font-semibold flex items-center gap-1">
+                <span>🌙 Night Ward Dark Theme Active</span>
+              </span>
+            )}
             <span>Bilingual Devanagari / English TTS Active</span>
             <span>•</span>
             <span>Fast-Track Red-Flag Triage Engine</span>

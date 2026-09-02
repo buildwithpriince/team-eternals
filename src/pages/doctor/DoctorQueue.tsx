@@ -1,17 +1,31 @@
 import React, { useState } from 'react';
-import { AlertOctagon, User, Clock, Stethoscope, ChevronRight, Sparkles, Filter, FileText, ArrowUpRight, Activity } from 'lucide-react';
+import { AlertOctagon, User, Clock, Stethoscope, ChevronRight, Sparkles, Filter, FileText, ArrowUpRight, Activity, Database, RefreshCw } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PatientRecord, Department } from '../../types';
 import { RedFlagBanner } from '../../components/RedFlagBanner';
+import { fetchQueueFromBackend } from '../../utils/supabaseSync';
 
 interface DoctorQueueProps {
   onSelectPatient: (patient: PatientRecord) => void;
 }
 
 export const DoctorQueue: React.FC<DoctorQueueProps> = ({ onSelectPatient }) => {
-  const { patients, activeDoctorPatient, loggedInDoctor, kioskPatient } = useApp();
+  const { patients, activeDoctorPatient, loggedInDoctor, kioskPatient, updatePatientRecord } = useApp();
   const [filterDept, setFilterDept] = useState<'all' | Department>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      const refreshed = await fetchQueueFromBackend(filterDept);
+      if (refreshed && refreshed.length > 0) {
+        // Patients state will be updated via fetch
+      }
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 500);
+    }
+  };
 
   // Filter patients
   const filteredPatients = patients.filter((p) => {
@@ -100,8 +114,21 @@ export const DoctorQueue: React.FC<DoctorQueueProps> = ({ onSelectPatient }) => 
             placeholder="Search name, token..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-slate-400 text-slate-900 w-44"
+            className="px-3.5 py-1.5 text-xs font-semibold bg-white border border-slate-300 rounded-xl focus:ring-2 focus:ring-slate-400 text-slate-900 w-40"
           />
+
+          {/* Realtime Live Status Badge & Refresh */}
+          <button
+            id="btn-refresh-queue"
+            type="button"
+            onClick={handleManualRefresh}
+            disabled={isRefreshing}
+            className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-800 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition-colors cursor-pointer"
+            title="Supabase Realtime Sync Active"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Supabase Live</span>
+          </button>
         </div>
       </div>
 

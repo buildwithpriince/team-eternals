@@ -9,6 +9,7 @@ export const Step7DeferredIdentity: React.FC = () => {
     language,
     theme,
     speakText,
+    stopSpeaking,
     kioskPatient,
     updateKioskPatient,
     completeKioskFlow,
@@ -31,11 +32,50 @@ export const Step7DeferredIdentity: React.FC = () => {
   }, [language]);
 
   const handleVoiceCaptureIdentity = (transcript: string) => {
-    // Try to parse name and age from voice transcript
-    const parts = transcript.split(' ');
-    if (parts.length > 0 && !name) {
-      setName(transcript);
+    if (!transcript || !transcript.trim()) return;
+    const cleanText = transcript.trim();
+
+    // Look for age in spoken transcript
+    const ageMatch =
+      cleanText.match(/(?:age|umar|उम्र)\s*(?:is|hai|है|:)?\s*(\d{1,3})/i) ||
+      cleanText.match(/(\d{1,3})\s*(?:years?|saal|yrs|वर्ष|साल)/i);
+    if (ageMatch && ageMatch[1]) {
+      const parsedSpokenAge = parseInt(ageMatch[1], 10);
+      if (parsedSpokenAge > 0 && parsedSpokenAge < 120) {
+        setAge(parsedSpokenAge);
+      }
     }
+
+    // Look for 10-digit phone in transcript
+    const digitsOnly = cleanText.replace(/\D/g, '');
+    if (digitsOnly.length === 10) {
+      setPhone(digitsOnly);
+    }
+
+    // Extract spoken name
+    const cleanedName = cleanText
+      .replace(/my name is/gi, '')
+      .replace(/mera naam/gi, '')
+      .replace(/mera nam/gi, '')
+      .replace(/मेरा नाम/gi, '')
+      .replace(/hai/gi, '')
+      .replace(/है/gi, '')
+      .replace(/aur/gi, '')
+      .replace(/and/gi, '')
+      .replace(/(?:age|umar|उम्र)\s*(?:is|hai|है|:)?\s*\d{1,3}/gi, '')
+      .replace(/\d{1,3}\s*(?:years?|saal|yrs|वर्ष|साल)/gi, '')
+      .replace(/\d{10}/g, '')
+      .replace(/[.,]/g, '')
+      .trim();
+
+    if (cleanedName && cleanedName.length > 1 && !name) {
+      setName(cleanedName);
+    }
+
+    console.log('[Step7] Voice captured identity transcript:', {
+      transcript,
+      extracted: { name: cleanedName, age: ageMatch?.[1], phone: digitsOnly.length === 10 ? digitsOnly : undefined },
+    });
   };
 
   const handleQuickAutofillElderly = () => {
@@ -48,15 +88,47 @@ export const Step7DeferredIdentity: React.FC = () => {
 
   const handleSubmitIdentity = (e: React.FormEvent) => {
     e.preventDefault();
-    updateKioskPatient({
-      name: name || (language === 'hi' ? 'मरीज' : 'Patient'),
-      age: age || 50,
+
+    const cleanName = (name || '').trim();
+    const cleanAge =
+      typeof age === 'number'
+        ? age
+        : age && String(age).trim() !== ''
+        ? parseInt(String(age).trim(), 10) || null
+        : null;
+
+    let cleanPhone = (phone || '').trim();
+    if (cleanPhone) {
+      const digits = cleanPhone.replace(/\D/g, '');
+      if (digits.length === 10) {
+        cleanPhone = `+91 ${digits.slice(0, 5)} ${digits.slice(5)}`;
+      } else if (digits.length === 12 && digits.startsWith('91')) {
+        const ten = digits.slice(2);
+        cleanPhone = `+91 ${ten.slice(0, 5)} ${ten.slice(5)}`;
+      } else if (!cleanPhone.startsWith('+')) {
+        cleanPhone = `+91 ${cleanPhone}`;
+      }
+    }
+
+    const cleanAbha = (abhaId || '').trim();
+
+    const identityPayload: Partial<typeof kioskPatient> = {
+      name: cleanName || (language === 'hi' ? 'मरीज' : 'Patient'),
+      age: cleanAge ?? (language === 'hi' ? 45 : 45),
       gender,
-      phone: phone || '+91 98000 00000',
-      abhaId,
+      phone: cleanPhone || '',
+      abhaId: cleanAbha || '',
+    };
+
+    console.log('[Step7 Sign-Up] Form submitted with patient identity:', {
+      rawTypedState: { name, age, gender, phone, abhaId },
+      preparedPayload: identityPayload,
+      targetPatientId: kioskPatient.id,
     });
 
-    completeKioskFlow();
+    stopSpeaking();
+    updateKioskPatient(identityPayload);
+    completeKioskFlow(identityPayload);
     setCurrentKioskStep(8);
   };
 

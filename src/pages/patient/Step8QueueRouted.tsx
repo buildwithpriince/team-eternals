@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, QrCode, Clock, MapPin, Stethoscope, Printer, MessageSquare, ArrowRight, Sparkles, RefreshCw, UserCheck, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, QrCode, Clock, MapPin, Stethoscope, Printer, MessageSquare, ArrowRight, Sparkles, RefreshCw, UserCheck, AlertTriangle, Volume2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { speechService } from '../../utils/speech';
 
 export const Step8QueueRouted: React.FC = () => {
   const {
@@ -27,8 +28,13 @@ export const Step8QueueRouted: React.FC = () => {
   const queuePromptEn = `Your consultation token ${tokenNum} is confirmed. Please proceed to ${roomNum}. Estimated wait time is ${waitTime} minutes.`;
 
   useEffect(() => {
+    speechService.playChime('success');
     speakText(language === 'hi' ? queuePromptHi : queuePromptEn, language);
   }, [language]);
+
+  const handleReplayVoice = () => {
+    speakText(language === 'hi' ? queuePromptHi : queuePromptEn, language);
+  };
 
   const handlePrintSlip = () => {
     setIsPrinted(true);
@@ -162,7 +168,10 @@ export const Step8QueueRouted: React.FC = () => {
           </span>
           {kioskPatient.phone && (
             <span>
-              <strong>{language === 'hi' ? 'मोबाइल:' : 'Phone:'}</strong> +91 {kioskPatient.phone}
+              <strong>{language === 'hi' ? 'मोबाइल:' : 'Phone:'}</strong>{' '}
+              {kioskPatient.phone.startsWith('+91')
+                ? kioskPatient.phone
+                : `+91 ${kioskPatient.phone}`}
             </span>
           )}
           {kioskPatient.abhaId && (
@@ -173,8 +182,20 @@ export const Step8QueueRouted: React.FC = () => {
         </div>
       </div>
 
-      {/* Ticket Actions: Print & SMS */}
+      {/* Ticket Actions: Speak, Print & SMS */}
       <div className="flex flex-wrap items-center justify-center gap-3">
+        <button
+          id="btn-replay-token-voice"
+          type="button"
+          onClick={handleReplayVoice}
+          className="px-6 py-3.5 bg-cyan-50 hover:bg-cyan-100 border-2 border-cyan-300 rounded-xl font-bold text-cyan-950 text-sm sm:text-base flex items-center gap-2 shadow-sm cursor-pointer"
+        >
+          <Volume2 className="w-5 h-5 text-cyan-800" />
+          <span>
+            {language === 'hi' ? 'आवाज में पुनः सुनें' : 'Replay Audio'}
+          </span>
+        </button>
+
         <button
           id="btn-print-token-slip"
           type="button"

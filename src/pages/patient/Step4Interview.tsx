@@ -18,6 +18,7 @@ import { speechService } from '../../utils/speech';
 import { matchVoiceToOptions, matchSemanticsLocally } from '../../utils/aiMatcher';
 import {
   fetchNextInterviewTurn,
+  getDeterministicFallbackQuestion,
   StructuredAccumulatorState,
   StructuredTurnRecord,
 } from '../../utils/interviewService';
@@ -118,53 +119,31 @@ export const Step4Interview: React.FC = () => {
     activeQuestionIdRef.current = currentQuestion.id;
   }, [currentQuestion.id]);
 
-  // Initial load of turn 1 from backend Gemini engine if starting fresh
+  // Initial load of turn 1 if starting fresh
   const initialLoadRef = useRef(false);
   useEffect(() => {
     if (!initialLoadRef.current) {
       initialLoadRef.current = true;
-      setIsLoadingTurn(true);
-      const departmentTitle =
-        department === 'ayush'
-          ? 'AYUSH & Integrative Medicine OPD'
-          : 'General Internal Medicine OPD';
-
-      fetchNextInterviewTurn({
-        mode: department,
-        language,
-        department: departmentTitle,
-        structuredState,
-      })
-        .then((nextTurn) => {
-          const loadedQ: BackendQuestionContract = {
-            id: `turn_1_${nextTurn.section}`,
-            question_en: nextTurn.question_en,
-            question_hi: nextTurn.question_hi,
-            input_type: nextTurn.input_type,
-            options: nextTurn.options,
-            section: nextTurn.section,
-            symptom_tags: nextTurn.symptom_tags,
-            section_complete: nextTurn.section_complete,
-            interview_complete: nextTurn.interview_complete,
-            audio_prompt_en: nextTurn.audio_prompt_en || nextTurn.question_en,
-            audio_prompt_hi: nextTurn.audio_prompt_hi || nextTurn.question_hi,
-          };
-          setCurrentQuestion(loadedQ);
-          if (autoVoiceEnabled) {
-            const prompt = language === 'hi' ? loadedQ.audio_prompt_hi! : loadedQ.audio_prompt_en!;
-            speakText(prompt, language);
-          }
-        })
-        .catch((err) => {
-          console.warn('Initial turn fetch error:', err);
-        })
-        .finally(() => {
-          setIsLoadingTurn(false);
-        });
+      const initialTurn = getDeterministicFallbackQuestion(department, structuredState);
+      const loadedQ: BackendQuestionContract = {
+        id: `turn_1_${initialTurn.section}`,
+        question_en: initialTurn.question_en,
+        question_hi: initialTurn.question_hi,
+        input_type: initialTurn.input_type,
+        options: initialTurn.options,
+        section: initialTurn.section,
+        symptom_tags: initialTurn.symptom_tags,
+        section_complete: initialTurn.section_complete,
+        interview_complete: initialTurn.interview_complete,
+        audio_prompt_en: initialTurn.audio_prompt_en || initialTurn.question_en,
+        audio_prompt_hi: initialTurn.audio_prompt_hi || initialTurn.question_hi,
+      };
+      setCurrentQuestion(loadedQ);
+      setIsLoadingTurn(false);
     }
-  }, [department, language, autoVoiceEnabled, speakText, structuredState]);
+  }, [department, structuredState]);
 
-  // Clean voice state when question changes and auto-speak prompt
+  // Clean voice state when question changes and auto-speak prompt cleanly
   useEffect(() => {
     if (recognitionRef.current) {
       try {
@@ -179,12 +158,14 @@ export const Step4Interview: React.FC = () => {
     setIsListening(false);
     setIsMatchingVoice(false);
 
-    if (autoVoiceEnabled && currentQuestion.question_en) {
+    if (autoVoiceEnabled && currentQuestion && (currentQuestion.question_en || currentQuestion.question_hi)) {
       const audioPrompt =
         language === 'hi'
           ? currentQuestion.audio_prompt_hi || currentQuestion.question_hi
           : currentQuestion.audio_prompt_en || currentQuestion.question_en;
-      speakText(audioPrompt, language);
+      if (audioPrompt) {
+        speakText(audioPrompt, language);
+      }
     }
   }, [currentQuestion.id, language, autoVoiceEnabled, speakText]);
 

@@ -4,6 +4,7 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { matchSemanticsLocally } from './src/utils/aiMatcher';
+import { getSupabaseServer, initializeSupabaseBackend } from './src/lib/supabaseServer';
 
 dotenv.config();
 
@@ -854,6 +855,487 @@ Return ONLY a JSON object:
     }
   });
 
+  // =========================================================================
+  // SUPABASE PERSISTENCE API ENDPOINTS (Interviews, Documents, Triage Queue)
+  // =========================================================================
+
+  // 1. Sync Interview Turn & Patient State to Supabase on every turn
+  app.post('/api/interviews/turn', async (req, res) => {
+    try {
+      const {
+        interviewId,
+        patientId,
+        patientData = {},
+        department = 'general',
+        status = 'in_interview',
+        structuredState = {},
+        transcript = [],
+        symptomTags = [],
+        redFlag = false,
+        redFlagReason = null,
+        opdToken = 'OPD-NEW',
+        summary = {},
+      } = req.body;
+
+      const supabase = getSupabaseServer();
+      if (!supabase) {
+        res.json({ success: true, saved: false, message: 'Supabase server client not configured' });
+        return;
+      }
+
+      // Upsert patient record
+      if (patientId) {
+        const parsedAge =
+          typeof patientData.age === 'number'
+            ? patientData.age
+            : patientData.age && String(patientData.age).trim() !== ''
+            ? parseInt(String(patientData.age).trim(), 10) || null
+            : null;
+
+        const patientPayload: any = {
+          id: patientId,
+          language_pref: patientData.language || 'hi',
+        };
+        if (patientData.name && patientData.name.trim() !== '') {
+          patientPayload.name = patientData.name.trim();
+        } else {
+          patientPayload.name = 'Anonymous Kiosk Patient';
+        }
+        if (parsedAge !== null) patientPayload.age = parsedAge;
+        if (patientData.phone) patientPayload.phone = String(patientData.phone).trim();
+        if (patientData.abhaId) patientPayload.abha_id = String(patientData.abhaId).trim();
+
+        const { error: patientErr } = await supabase.from('patients').upsert(
+          patientPayload,
+          { onConflict: 'id' }
+        );
+        if (patientErr) {
+          console.warn('[Supabase /api/interviews/turn] Patient upsert warning:', patientErr.message);
+        }
+      }
+
+      // Upsert interview record
+      if (interviewId) {
+        const { error: interviewErr } = await supabase.from('interviews').upsert(
+          {
+            id: interviewId,
+            patient_id: patientId || null,
+            department,
+            status,
+            structured_state: structuredState,
+            transcript: Array.isArray(transcript) ? transcript : [],
+            symptom_tags: Array.isArray(symptomTags) ? symptomTags : [],
+            red_flag: !!redFlag,
+            red_flag_reason: redFlagReason || null,
+            opd_token: opdToken,
+            summary: summary || {},
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'id' }
+        );
+        if (interviewErr) {
+          console.warn('[Supabase] Interview upsert warning:', interviewErr.message);
+        }
+      }
+
+      res.json({ success: true, interviewId, patientId });
+    } catch (err) {
+      console.error('[Supabase] Error saving interview turn:', err);
+      res.status(500).json({ error: 'Failed to persist interview turn' });
+    }
+  });
+
+  // 2. Real-time Red-Flag trigger update in Supabase
+  app.post('/api/interviews/red-flag', async (req, res) => {
+    try {
+      const { interviewId, redFlag = true, redFlagReason } = req.body;
+      const supabase = getSupabaseServer();
+      if (!supabase || !interviewId) {
+        res.json({ success: true, updated: false });
+        return;
+      }
+
+      const { error } = await supabase
+        .from('interviews')
+        .update({
+          red_flag: !!redFlag,
+          red_flag_reason: redFlagReason || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', interviewId);
+
+      if (error) {
+        console.warn('[Supabase] Red-flag update warning:', error.message);
+      }
+      res.json({ success: true, interviewId, redFlag, redFlagReason });
+    } catch (err) {
+      console.error('[Supabase] Error updating red flag:', err);
+      res.status(500).json({ error: 'Failed to update red flag' });
+    }
+  });
+
+  // 3. Finalize interview & update physician summary
+  app.post('/api/interviews/summary', async (req, res) => {
+    try {
+      const {
+        interviewId,
+        patientId,
+        status = 'waiting',
+        summary = {},
+        patientData = {},
+        transcript = [],
+        redFlag = false,
+        redFlagReason = null,
+        opdToken,
+      } = req.body;
+
+      console.log('[SERVER /api/interviews/summary] Received finalize request:', {
+        interviewId,
+        patientId,
+        patientData,
+        opdToken,
+        redFlag,
+      });
+
+      const supabase = getSupabaseServer();
+      if (!supabase || !interviewId) {
+        res.json({ success: true, updated: false, message: 'Supabase client or interviewId missing' });
+        return;
+      }
+
+      const targetPatientId = patientId || interviewId;
+
+      // Ensure patient record in 'patients' table is updated with final entered demographics
+      if (targetPatientId) {
+        const parsedAge =
+          typeof patientData.age === 'number'
+            ? patientData.age
+            : patientData.age && String(patientData.age).trim() !== ''
+            ? parseInt(String(patientData.age).trim(), 10) || null
+            : null;
+
+        const patientUpsertPayload = {
+          id: targetPatientId,
+          name:
+            patientData.name && String(patientData.name).trim() !== ''
+              ? String(patientData.name).trim()
+              : 'Anonymous Patient',
+          age: parsedAge,
+          phone:
+            patientData.phone && String(patientData.phone).trim() !== ''
+              ? String(patientData.phone).trim()
+              : null,
+          abha_id:
+            patientData.abhaId && String(patientData.abhaId).trim() !== ''
+              ? String(patientData.abhaId).trim()
+              : null,
+          language_pref: patientData.language || 'hi',
+        };
+
+        console.log(
+          '[SERVER /api/interviews/summary] WRITING PATIENT ROW TO SUPABASE:',
+          JSON.stringify(patientUpsertPayload, null, 2)
+        );
+
+        const { data: upsertedPatient, error: patientErr } = await supabase
+          .from('patients')
+          .upsert(patientUpsertPayload, { onConflict: 'id' })
+          .select()
+          .single();
+
+        if (patientErr) {
+          console.error('[SERVER /api/interviews/summary] Patient upsert error:', patientErr);
+        } else {
+          console.log('[SERVER /api/interviews/summary] Successfully wrote patient row:', upsertedPatient);
+        }
+      }
+
+      const { data: updatedInterview, error: interviewErr } = await supabase
+        .from('interviews')
+        .update({
+          patient_id: targetPatientId,
+          status,
+          summary,
+          transcript: Array.isArray(transcript) ? transcript : [],
+          red_flag: !!redFlag,
+          red_flag_reason: redFlagReason || null,
+          opd_token: opdToken,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', interviewId)
+        .select()
+        .single();
+
+      if (interviewErr) {
+        console.warn('[Supabase] Finalize interview warning:', interviewErr.message);
+      } else {
+        console.log('[SERVER /api/interviews/summary] Interview updated in DB:', updatedInterview?.id);
+      }
+
+      res.json({ success: true, interviewId, patientId: targetPatientId });
+    } catch (err) {
+      console.error('[Supabase] Error finalizing interview summary:', err);
+      res.status(500).json({ error: 'Failed to finalize interview summary' });
+    }
+  });
+
+  // 4. Document upload & extraction storage
+  app.post('/api/documents/upload', async (req, res) => {
+    try {
+      const {
+        interviewId,
+        documentId,
+        title = 'Medical Record',
+        docType = 'prescription',
+        extractedData = {},
+        fileBase64,
+        confidence = 95,
+      } = req.body;
+
+      const supabase = getSupabaseServer();
+      if (!supabase) {
+        res.json({
+          success: true,
+          document: { id: documentId, title, doc_type: docType, extracted_data: extractedData },
+        });
+        return;
+      }
+
+      let storagePath = null;
+
+      // If file image is provided, upload to Supabase "documents" bucket
+      if (fileBase64 && interviewId) {
+        try {
+          const match = fileBase64.match(/^data:(image\/[a-zA-Z+]+|application\/pdf);base64,(.+)$/);
+          const mimeType = match ? match[1] : 'image/jpeg';
+          const base64Data = match ? match[2] : fileBase64;
+          const buffer = Buffer.from(base64Data, 'base64');
+          const ext = mimeType.includes('pdf') ? 'pdf' : 'jpg';
+          const fileName = `${interviewId}/${documentId || Date.now()}.${ext}`;
+
+          const { data: uploadData, error: uploadErr } = await supabase.storage
+            .from('documents')
+            .upload(fileName, buffer, {
+              contentType: mimeType,
+              upsert: true,
+            });
+
+          if (!uploadErr) {
+            const { data: publicUrlData } = supabase.storage
+              .from('documents')
+              .getPublicUrl(fileName);
+            storagePath = publicUrlData?.publicUrl || fileName;
+          } else {
+            console.warn('[Supabase Storage] Upload error:', uploadErr.message);
+          }
+        } catch (uploadException) {
+          console.warn('[Supabase Storage] Buffer upload notice:', uploadException);
+        }
+      }
+
+      // Insert record into documents table
+      const docRecord = {
+        id: documentId,
+        interview_id: interviewId || null,
+        storage_path: storagePath || `documents/${interviewId}/${documentId || Date.now()}`,
+        extracted_data: extractedData,
+        doc_type: docType,
+        created_at: new Date().toISOString(),
+      };
+
+      const { data: insertedDoc, error: insertErr } = await supabase
+        .from('documents')
+        .upsert(docRecord, { onConflict: 'id' })
+        .select()
+        .single();
+
+      if (insertErr) {
+        console.warn('[Supabase] Document insert warning:', insertErr.message);
+      }
+
+      res.json({
+        success: true,
+        document: insertedDoc || docRecord,
+      });
+    } catch (err) {
+      console.error('[Supabase] Error uploading document:', err);
+      res.status(500).json({ error: 'Failed to upload document' });
+    }
+  });
+
+  // 5. Doctor Queue fetch endpoint with Supabase table join
+  app.get('/api/doctor/queue', async (req, res) => {
+    try {
+      const { department } = req.query;
+      const supabase = getSupabaseServer();
+
+      if (!supabase) {
+        res.json({ patients: [] });
+        return;
+      }
+
+      let query = supabase
+        .from('interviews')
+        .select(`
+          id,
+          patient_id,
+          department,
+          status,
+          structured_state,
+          transcript,
+          symptom_tags,
+          red_flag,
+          red_flag_reason,
+          summary,
+          opd_token,
+          assigned_doctor_id,
+          created_at,
+          updated_at,
+          patients (
+            id,
+            name,
+            age,
+            phone,
+            abha_id,
+            language_pref
+          ),
+          documents (
+            id,
+            storage_path,
+            extracted_data,
+            doc_type,
+            created_at
+          )
+        `)
+        .order('updated_at', { ascending: false });
+
+      if (department && department !== 'all') {
+        query = query.eq('department', department);
+      }
+
+      const { data: rows, error } = await query;
+      if (error) {
+        console.warn('[Supabase] Queue fetch warning:', error.message);
+        res.json({ patients: [] });
+        return;
+      }
+
+      // Map Supabase rows to PatientRecord interface for frontend
+      const mappedPatients = (rows || []).map((row: any) => {
+        const pat = row.patients || {};
+        const docs = (row.documents || []).map((d: any) => ({
+          id: d.id,
+          title: d.doc_type ? `${d.doc_type.replace(/_/g, ' ').toUpperCase()}` : 'Uploaded Report',
+          type: d.doc_type || 'prescription',
+          date: d.created_at ? new Date(d.created_at).toLocaleDateString() : 'Recent',
+          facility: 'OPD Document Archive',
+          confidence: 95,
+          extractedData: d.extracted_data || {},
+          fileUrl: d.storage_path,
+        }));
+
+        const historyAnswers: Record<string, any> = {};
+        if (Array.isArray(row.transcript)) {
+          row.transcript.forEach((t: any, idx: number) => {
+            const key = t.section || `turn_${idx + 1}`;
+            historyAnswers[key] = {
+              question_en: t.question_en || '',
+              question_hi: t.question_hi || '',
+              section: t.section || 'chief_complaint',
+              answer_en: t.answer_en || '',
+              answer_hi: t.answer_hi || '',
+              timestamp: t.timestamp || new Date(row.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              is_red_flag: !!t.is_red_flag,
+            };
+          });
+        }
+
+        const redFlagsList = [];
+        if (row.red_flag && row.red_flag_reason) {
+          redFlagsList.push(row.red_flag_reason);
+        }
+
+        const chiefComplaints = [];
+        if (row.structured_state?.chief_complaint) {
+          chiefComplaints.push(row.structured_state.chief_complaint);
+        } else if (historyAnswers['chief_complaint']?.answer_en) {
+          chiefComplaints.push(historyAnswers['chief_complaint'].answer_en);
+        } else {
+          chiefComplaints.push('General Consultation');
+        }
+
+        return {
+          id: row.id,
+          tokenNumber: row.opd_token || `OPD-${row.id.slice(0, 4).toUpperCase()}`,
+          name: pat.name || 'Kiosk Patient',
+          age: pat.age || 45,
+          gender: 'male',
+          phone: pat.phone || '+91 98000 00000',
+          abhaId: pat.abha_id || '',
+          department: row.department || 'general',
+          language: pat.language_pref || 'hi',
+          inputMode: 'touch',
+          redFlags: redFlagsList,
+          chiefComplaints,
+          historyAnswers,
+          scannedDocs: docs,
+          status: row.status || 'waiting',
+          timestamp: new Date(row.updated_at || row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          roomNumber: row.department === 'ayush' ? 'AYUSH Room 202' : 'OPD Room 104',
+          waitTimeMin: row.red_flag ? 2 : 12,
+          doctorAssigned: row.department === 'ayush' ? 'Dr. Ananya Vaidya, MD (Ayur)' : 'Dr. Rajesh Sharma, MD',
+          doctorSummary: row.summary && Object.keys(row.summary).length > 0 ? row.summary : undefined,
+        };
+      });
+
+      res.json({ patients: mappedPatients });
+    } catch (err) {
+      console.error('[Supabase] Error loading doctor queue:', err);
+      res.status(500).json({ error: 'Failed to load doctor queue', patients: [] });
+    }
+  });
+
+  // 6. Doctor profile management (doctors table)
+  app.post('/api/doctor/profile', async (req, res) => {
+    try {
+      const { id, name, department = 'general' } = req.body;
+      const supabase = getSupabaseServer();
+      if (!supabase || !id) {
+        res.json({ success: true });
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('doctors')
+        .upsert(
+          {
+            id,
+            name: name || 'Doctor',
+            department,
+          },
+          { onConflict: 'id' }
+        )
+        .select()
+        .single();
+
+      if (error) {
+        console.warn('[Supabase] Doctor profile upsert warning:', error.message);
+      }
+      res.json({ success: true, doctor: data });
+    } catch (err) {
+      console.error('[Supabase] Error updating doctor profile:', err);
+      res.status(500).json({ error: 'Failed to update doctor profile' });
+    }
+  });
+
+  // 7. Supabase client credentials config for browser initialization
+  app.get('/api/supabase-config', (req, res) => {
+    res.json({
+      supabaseUrl: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://owlrokravkwkptmsogai.supabase.co',
+      supabaseAnonKey: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || '',
+    });
+  });
+
   // Vite middleware for development vs static build in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -869,6 +1351,11 @@ Return ONLY a JSON object:
     });
   }
 
+  // Initialize Supabase tables/storage bucket verification on launch
+  initializeSupabaseBackend().catch((err) => {
+    console.warn('Initial Supabase verification note:', err);
+  });
+
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Swasthya AI server running on http://0.0.0.0:${PORT}`);
   });
@@ -877,3 +1364,4 @@ Return ONLY a JSON object:
 startServer().catch((err) => {
   console.error('Failed to start server:', err);
 });
+

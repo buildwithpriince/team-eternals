@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import {
   Department,
   AppLanguage,
@@ -17,6 +17,15 @@ import {
   buildDeterministicDoctorSummary,
   generateDoctorSummaryFromGemini,
 } from '../utils/summaryService';
+import { supabase } from '../lib/supabaseClient';
+import {
+  syncInterviewTurnToBackend,
+  updateRedFlagInBackend,
+  finalizeInterviewInBackend,
+  uploadDocumentToBackend,
+  fetchQueueFromBackend,
+} from '../utils/supabaseSync';
+import { generateUUID } from '../utils/uuid';
 
 export type AppView = 'kiosk' | 'doctor';
 
@@ -50,7 +59,7 @@ interface AppContextType {
   addScannedDocument: (doc: ScannedDocument) => void;
   removeScannedDocument: (docId: string) => void;
   resetKioskFlow: () => void;
-  completeKioskFlow: () => PatientRecord;
+  completeKioskFlow: (identityOverrides?: Partial<PatientRecord>) => PatientRecord;
   isGeneratingSummary: boolean;
   regenerateDoctorSummary: (patientId: string) => Promise<DoctorSummaryData | null>;
 
@@ -99,7 +108,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Current Patient being onboarded on Kiosk
   const [kioskPatient, setKioskPatient] = useState<Partial<PatientRecord>>({
-    id: `pat_${Date.now()}`,
+    id: generateUUID(),
     tokenNumber: `OPD-${Math.floor(100 + Math.random() * 900)}`,
     department: 'general',
     language: 'hi',
@@ -127,6 +136,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setKioskPatient((prev) => ({ ...prev, department }));
   }, [department]);
 
+  // Load live patient queue from Supabase / Backend on mount and department change
+  useEffect(() => {
+    fetchQueueFromBackend(department).then((serverPatients) => {
+      if (serverPatients && serverPatients.length > 0) {
+        setPatients(serverPatients);
+        if (!activeDoctorPatient) {
+          setActiveDoctorPatient(serverPatients[0]);
+        }
+      }
+    });
+  }, [department]);
+
+  // Set up Supabase Realtime subscription on interviews table for live queue & red-flag alerts
+  useEffect(() => {
+    try {
+      const channel = supabase
+        .channel('realtime-interviews-changes')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'interviews' },
+          (payload) => {
+            // Check for red flag alert
+            const record = payload.new as any;
+            if (record && record.red_flag && record.red_flag_reason) {
+              speechService.playChime('alert');
+              const newAlert: RedFlagAlert = {
+                id: `alert_${record.id || Date.now()}`,
+                patientId: record.patient_id || record.id,
+                patientName: 'Kiosk Patient (Realtime Triage)',
+                tokenNumber: record.opd_token || 'OPD-REALTIME',
+                flagReason: record.red_flag_reason,
+                department: record.department || 'general',
+                severity: 'critical',
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                acknowledged: false,
+              };
+
+              setRedFlagAlerts((prev) => {
+                if (prev.some((a) => a.flagReason === newAlert.flagReason && a.tokenNumber === newAlert.tokenNumber)) {
+                  return prev;
+                }
+                return [newAlert, ...prev];
+              });
+            }
+
+            // Live queue refresh
+            fetchQueueFromBackend(department).then((updatedList) => {
+              if (updatedList && updatedList.length > 0) {
+                setPatients(updatedList);
+              }
+            });
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
+    } catch (realtimeErr) {
+      console.warn('Supabase Realtime subscription notice:', realtimeErr);
+    }
+  }, [department]);
+
   const updateKioskPatient = (updates: Partial<PatientRecord>) => {
     setKioskPatient((prev) => ({ ...prev, ...updates }));
   };
@@ -142,6 +214,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     redFlagReason?: string
   ) => {
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    let updatedPatientSnapshot: Partial<PatientRecord> | null = null;
 
     setKioskPatient((prev) => {
       const updatedAnswers = {
@@ -168,15 +242,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updatedComplaints.push(`${answerEn} (${answerHi})`);
       }
 
-      return {
+      const snapshot: Partial<PatientRecord> = {
         ...prev,
         historyAnswers: updatedAnswers,
         redFlags: updatedRedFlags,
         chiefComplaints: updatedComplaints.length > 0 ? updatedComplaints : prev.chiefComplaints,
       };
+      updatedPatientSnapshot = snapshot;
+      return snapshot;
     });
 
-    // If red flag triggered in real time, emit alert to Doctor dashboard
+    // Asynchronously write turn to Supabase persistence
+    const currentInterviewId = kioskPatient.id || generateUUID();
+    const currentAnswers = {
+      ...(kioskPatient.historyAnswers || {}),
+      [questionId]: {
+        question_en: questionEn,
+        question_hi: questionHi,
+        section,
+        answer_en: answerEn,
+        answer_hi: answerHi,
+        timestamp,
+        is_red_flag: isRedFlag,
+      },
+    };
+
+    syncInterviewTurnToBackend({
+      interviewId: currentInterviewId,
+      patientId: currentInterviewId,
+      patientData: {
+        name: kioskPatient.name,
+        age: kioskPatient.age,
+        gender: kioskPatient.gender,
+        phone: kioskPatient.phone,
+        abhaId: kioskPatient.abhaId,
+        language: kioskPatient.language || language,
+        department: kioskPatient.department || department,
+      },
+      department,
+      status: 'in_interview',
+      structuredState: {
+        chief_complaint: kioskPatient.chiefComplaints?.[0],
+        current_section: section,
+        historyAnswers: currentAnswers,
+      },
+      transcript: Object.values(currentAnswers),
+      symptomTags: kioskPatient.redFlags || [],
+      redFlag: !!isRedFlag,
+      redFlagReason,
+      opdToken: kioskPatient.tokenNumber,
+    }).catch((err) => {
+      console.warn('[Supabase Sync] Turn write warning:', err);
+    });
+
+    // If red flag triggered in real time, emit alert to Doctor dashboard and update backend
     if (isRedFlag && redFlagReason) {
       speechService.playChime('alert');
       const newAlert: RedFlagAlert = {
@@ -191,6 +310,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         acknowledged: false,
       };
       setRedFlagAlerts((prev) => [newAlert, ...prev]);
+
+      updateRedFlagInBackend(currentInterviewId, true, redFlagReason).catch((rfErr) => {
+        console.warn('[Supabase Sync] Red flag sync warning:', rfErr);
+      });
     }
   };
 
@@ -199,6 +322,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev,
       scannedDocs: [...(prev.scannedDocs || []), doc],
     }));
+
+    // Asynchronously upload to Supabase documents table & storage
+    if (kioskPatient.id) {
+      uploadDocumentToBackend(kioskPatient.id, doc).catch((docErr) => {
+        console.warn('[Supabase Sync] Document upload warning:', docErr);
+      });
+    }
   };
 
   const removeScannedDocument = (docId: string) => {
@@ -213,7 +343,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const tokenPrefix = department === 'ayush' ? 'AYUSH' : 'OPD';
     const randomToken = `${tokenPrefix}-${Math.floor(200 + Math.random() * 800)}`;
     setKioskPatient({
-      id: `pat_${Date.now()}`,
+      id: generateUUID(),
       tokenNumber: randomToken,
       department,
       language,
@@ -236,31 +366,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentKioskStep(1);
   };
 
-  const completeKioskFlow = (): PatientRecord => {
-    const initialSummary = buildDeterministicDoctorSummary(kioskPatient);
+  const completeKioskFlow = (identityOverrides?: Partial<PatientRecord>): PatientRecord => {
+    const mergedPatient: Partial<PatientRecord> = {
+      ...kioskPatient,
+      ...(identityOverrides || {}),
+    };
+
+    setKioskPatient(mergedPatient);
+
+    const initialSummary = buildDeterministicDoctorSummary(mergedPatient);
+
+    const patientId = mergedPatient.id || kioskPatient.id || generateUUID();
+
+    const rawAge = mergedPatient.age;
+    const parsedAge =
+      typeof rawAge === 'number'
+        ? rawAge
+        : rawAge && String(rawAge).trim() !== ''
+        ? parseInt(String(rawAge).trim(), 10) || null
+        : null;
 
     const finalRecord: PatientRecord = {
-      id: kioskPatient.id || `pat_${Date.now()}`,
-      tokenNumber: kioskPatient.tokenNumber || 'OPD-300',
-      name: kioskPatient.name || (language === 'hi' ? 'नाम दर्ज नहीं' : 'Anonymous Patient'),
-      age: kioskPatient.age || 45,
-      gender: kioskPatient.gender || 'male',
-      phone: kioskPatient.phone || '+91 98000 00000',
-      abhaId: kioskPatient.abhaId || '',
-      department: department,
-      language: language,
-      inputMode: inputMode,
-      redFlags: kioskPatient.redFlags || [],
-      chiefComplaints: kioskPatient.chiefComplaints && kioskPatient.chiefComplaints.length > 0
-        ? kioskPatient.chiefComplaints
-        : ['Routine Consultation'],
-      historyAnswers: kioskPatient.historyAnswers || {},
-      scannedDocs: kioskPatient.scannedDocs || [],
+      id: patientId,
+      tokenNumber: mergedPatient.tokenNumber || `OPD-${Math.floor(100 + Math.random() * 900)}`,
+      name:
+        mergedPatient.name && mergedPatient.name.trim() !== ''
+          ? mergedPatient.name.trim()
+          : (language === 'hi' ? 'मरीज' : 'Patient'),
+      age: parsedAge !== null ? parsedAge : (language === 'hi' ? 45 : 45),
+      gender: mergedPatient.gender || 'male',
+      phone: mergedPatient.phone ? String(mergedPatient.phone).trim() : '',
+      abhaId: mergedPatient.abhaId ? String(mergedPatient.abhaId).trim() : '',
+      department: mergedPatient.department || department,
+      language: mergedPatient.language || language,
+      inputMode: mergedPatient.inputMode || inputMode,
+      redFlags: mergedPatient.redFlags || [],
+      chiefComplaints:
+        mergedPatient.chiefComplaints && mergedPatient.chiefComplaints.length > 0
+          ? mergedPatient.chiefComplaints
+          : ['Routine Consultation'],
+      historyAnswers: mergedPatient.historyAnswers || {},
+      scannedDocs: mergedPatient.scannedDocs || [],
       status: 'waiting',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      roomNumber: department === 'ayush' ? 'AYUSH Room 202' : 'OPD Room 104',
-      waitTimeMin: (kioskPatient.redFlags && kioskPatient.redFlags.length > 0) ? 2 : 12,
-      doctorAssigned: department === 'ayush' ? 'Dr. Ananya Vaidya, MD (Ayur)' : 'Dr. Rajesh Sharma, MD',
+      roomNumber: (mergedPatient.department || department) === 'ayush' ? 'AYUSH Room 202' : 'OPD Room 104',
+      waitTimeMin: (mergedPatient.redFlags && mergedPatient.redFlags.length > 0) ? 2 : 12,
+      doctorAssigned:
+        (mergedPatient.department || department) === 'ayush'
+          ? 'Dr. Ananya Vaidya, MD (Ayur)'
+          : 'Dr. Rajesh Sharma, MD',
       vitals: {
         bp: '128/82 mmHg',
         pulse: '78 bpm',
@@ -270,7 +424,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       doctorSummary: initialSummary,
     };
 
-    setPatients((prev) => [finalRecord, ...prev]);
+    console.log('[AppContext] completeKioskFlow generated finalRecord for Supabase:', {
+      patientId: finalRecord.id,
+      name: finalRecord.name,
+      age: finalRecord.age,
+      gender: finalRecord.gender,
+      phone: finalRecord.phone,
+      abhaId: finalRecord.abhaId,
+      tokenNumber: finalRecord.tokenNumber,
+      overridesPassed: identityOverrides,
+    });
+
+    setPatients((prev) => [finalRecord, ...prev.filter((p) => p.id !== finalRecord.id)]);
+
+    // Asynchronously finalize interview in Supabase backend
+    finalizeInterviewInBackend(finalRecord.id, finalRecord).catch((finErr) => {
+      console.warn('[Supabase Sync] Finalize interview warning:', finErr);
+    });
 
     // Asynchronously call Gemini (gemini-2.5-flash) to generate high-fidelity physician summary
     setIsGeneratingSummary(true);
@@ -278,6 +448,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .then((aiSummary) => {
         if (aiSummary) {
           updatePatientRecord(finalRecord.id, { doctorSummary: aiSummary });
+          // Update summary in Supabase
+          finalizeInterviewInBackend(finalRecord.id, {
+            ...finalRecord,
+            doctorSummary: aiSummary,
+          }).catch(() => {});
         }
       })
       .catch((err) => {
@@ -289,6 +464,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     return finalRecord;
   };
+
 
   const regenerateDoctorSummary = async (patientId: string): Promise<DoctorSummaryData | null> => {
     const targetPatient = patients.find((p) => p.id === patientId) || activeDoctorPatient;
@@ -325,7 +501,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRedFlagAlerts((prev) => [alert, ...prev]);
   };
 
-  const speakText = (text: string, lang: AppLanguage = language) => {
+  const speakText = useCallback((text: string, lang: AppLanguage = language) => {
     if (!autoVoiceEnabled) return;
     setIsSpeaking(true);
     speechService.speak(
@@ -335,12 +511,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       () => setIsSpeaking(false),
       () => setIsSpeaking(false)
     );
-  };
+  }, [autoVoiceEnabled, language]);
 
-  const stopSpeaking = () => {
+  const stopSpeaking = useCallback(() => {
     speechService.stop();
     setIsSpeaking(false);
-  };
+  }, []);
 
   const updatePatientRecord = (patientId: string, updates: Partial<PatientRecord>) => {
     setPatients((prev) =>

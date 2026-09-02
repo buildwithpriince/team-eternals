@@ -16,6 +16,8 @@ import {
   RotateCw,
   Info,
   ShieldCheck,
+  CheckSquare,
+  Undo2,
 } from 'lucide-react';
 import { PatientRecord, DoctorSummaryData } from '../../types';
 import { useApp } from '../../context/AppContext';
@@ -31,7 +33,13 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
   patient,
   onBackToQueue,
 }) => {
-  const { updatePatientRecord, loggedInDoctor, isGeneratingSummary, regenerateDoctorSummary } = useApp();
+  const {
+    updatePatientRecord,
+    markPatientAsDiagnosed,
+    loggedInDoctor,
+    isGeneratingSummary,
+    regenerateDoctorSummary,
+  } = useApp();
 
   // Initialize summary data from patient record or build deterministic fallback
   const initialSummary: DoctorSummaryData =
@@ -55,7 +63,9 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
   const [physicianNotes, setPhysicianNotes] = useState<string>(
     patient.physicianNotes || ''
   );
-  const [savedSuccess, setSavedSuccess] = useState<boolean>(patient.doctorApproved || false);
+  const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
+  const [diagnosedSuccess, setDiagnosedSuccess] = useState<boolean>(patient.status === 'completed');
+  const [isMarkingDiagnosed, setIsMarkingDiagnosed] = useState<boolean>(false);
   const [isRxModalOpen, setIsRxModalOpen] = useState<boolean>(false);
   const [modelUsed, setModelUsed] = useState<string>(initialSummary.modelUsed || 'gemini-2.5-flash');
 
@@ -76,10 +86,15 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
     if (summary.modelUsed) {
       setModelUsed(summary.modelUsed);
     }
-  }, [patient.doctorSummary, patient.id]);
+    if (patient.physicianNotes) {
+      setPhysicianNotes(patient.physicianNotes);
+    }
+    setDiagnosedSuccess(patient.status === 'completed');
+  }, [patient.doctorSummary, patient.id, patient.status, patient.physicianNotes]);
 
   const isAyush = patient.department === 'ayush';
   const hasRedFlags = warningFlags.length > 0;
+  const isCompleted = patient.status === 'completed';
 
   const handleRegenerate = async () => {
     const freshSummary = await regenerateDoctorSummary(patient.id);
@@ -101,39 +116,64 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
     }
   };
 
+  const getUpdatedSummaryObject = (): DoctorSummaryData => ({
+    chiefComplaint,
+    hpi: hpiText,
+    pastMedicalSurgicalHistory: pastHistoryText,
+    drugAndAllergyHistory: drugAllergyText,
+    familyHistory: familyHistoryText,
+    personalHistory: personalHistoryText,
+    reviewOfSystems: rosText,
+    priorityClinicalWarningFlags: warningFlags,
+    ayushAssessment: isAyush
+      ? {
+          prakriti: patient.ayushAssessment?.prakriti || 'Vata-Kapha Pradhana',
+          agni: patient.ayushAssessment?.agni || 'Mandagni',
+          kostha: patient.ayushAssessment?.kostha || 'Krura Kostha',
+          bala: patient.ayushAssessment?.bala || 'Madhyama Rogibala',
+          clinicalNotes: ayushNotes,
+        }
+      : undefined,
+    generatedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    modelUsed,
+  });
+
   const handleSaveEMR = () => {
-    const updatedSummary: DoctorSummaryData = {
-      chiefComplaint,
-      hpi: hpiText,
-      pastMedicalSurgicalHistory: pastHistoryText,
-      drugAndAllergyHistory: drugAllergyText,
-      familyHistory: familyHistoryText,
-      personalHistory: personalHistoryText,
-      reviewOfSystems: rosText,
-      priorityClinicalWarningFlags: warningFlags,
-      ayushAssessment: isAyush
-        ? {
-            prakriti: patient.ayushAssessment?.prakriti || 'Vata-Kapha Pradhana',
-            agni: patient.ayushAssessment?.agni || 'Mandagni',
-            kostha: patient.ayushAssessment?.kostha || 'Krura Kostha',
-            bala: patient.ayushAssessment?.bala || 'Madhyama Rogibala',
-            clinicalNotes: ayushNotes,
-          }
-        : undefined,
-      generatedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      modelUsed,
-    };
+    const updatedSummary = getUpdatedSummaryObject();
 
     updatePatientRecord(patient.id, {
       chiefComplaints: [chiefComplaint],
       doctorSummary: updatedSummary,
       physicianNotes,
       doctorApproved: true,
-      status: 'completed',
+      status: patient.status === 'waiting' ? 'in_consultation' : patient.status,
     });
     setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 3000);
+    setTimeout(() => setSavedSuccess(false), 3500);
     setIsEditing(false);
+  };
+
+  const handleMarkDiagnosed = async () => {
+    setIsMarkingDiagnosed(true);
+    const updatedSummary = getUpdatedSummaryObject();
+    const outcomeNote = physicianNotes || chiefComplaint || 'Consultation & treatment plan completed';
+
+    await markPatientAsDiagnosed(patient.id, {
+      outcome: outcomeNote,
+      notes: physicianNotes,
+      summary: updatedSummary,
+    });
+
+    setIsMarkingDiagnosed(false);
+    setDiagnosedSuccess(true);
+    setIsEditing(false);
+  };
+
+  const handleReopenToQueue = () => {
+    updatePatientRecord(patient.id, {
+      status: 'waiting',
+    });
+    setDiagnosedSuccess(false);
   };
 
   return (
@@ -143,7 +183,7 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
     >
       {/* Top Bar: Back to Queue + Patient Banner + Actions */}
       <div className="bg-white rounded-2xl p-5 sm:p-6 border-2 border-slate-300 shadow-sm space-y-4">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
           {/* Back button + Patient Header */}
           <div className="flex items-start sm:items-center gap-4">
             <button
@@ -153,7 +193,7 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold flex items-center gap-1.5 cursor-pointer text-sm shrink-0"
             >
               <ArrowLeft className="w-4 h-4" />
-              <span>Queue</span>
+              <span>Back</span>
             </button>
 
             <div>
@@ -176,13 +216,25 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                 >
                   {isAyush ? 'AYUSH & Ayurveda OPD' : 'General Internal Medicine'}
                 </span>
+
+                {isCompleted && (
+                  <span className="inline-flex items-center gap-1.5 text-xs font-black uppercase px-3 py-1 rounded-md bg-emerald-800 text-white shadow-xs">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Diagnosed & Treated</span>
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center gap-4 text-xs text-slate-500 font-medium mt-1 flex-wrap">
                 <span>Phone: {patient.phone}</span>
                 {patient.abhaId && <span>ABHA: {patient.abhaId}</span>}
                 <span>Kiosk Mode: {patient.inputMode.toUpperCase()} ({patient.language.toUpperCase()})</span>
-                <span>Intake Time: {patient.timestamp}</span>
+                <span>Intake: {patient.timestamp}</span>
+                {patient.consultationTime && (
+                  <span className="font-bold text-emerald-800">
+                    • Consulted at {patient.consultationTime}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -195,17 +247,17 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               disabled={isGeneratingSummary}
               onClick={handleRegenerate}
               className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-900 border border-indigo-200 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer transition-colors disabled:opacity-60"
-              title="Re-query Gemini 2.5 Flash with interview transcript & extracted document JSON"
+              title="Re-query Gemini with interview transcript & extracted document JSON"
             >
               <RotateCw className={`w-4 h-4 text-indigo-700 ${isGeneratingSummary ? 'animate-spin' : ''}`} />
-              <span>{isGeneratingSummary ? 'Generating AI Summary...' : 'Regenerate AI Summary'}</span>
+              <span>{isGeneratingSummary ? 'Generating AI Summary...' : 'Regenerate Summary'}</span>
             </button>
 
             <button
               id="btn-toggle-inline-edit"
               type="button"
               onClick={() => setIsEditing(!isEditing)}
-              className={`px-4 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border cursor-pointer transition-colors ${
+              className={`px-3.5 py-2.5 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 border cursor-pointer transition-colors ${
                 isEditing
                   ? 'bg-amber-100 text-amber-900 border-amber-400'
                   : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-300'
@@ -219,21 +271,57 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
               id="btn-print-opd-rx"
               type="button"
               onClick={() => setIsRxModalOpen(true)}
-              className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer"
+              className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl font-bold text-xs sm:text-sm flex items-center gap-1.5 cursor-pointer"
             >
               <Printer className="w-4 h-4 text-slate-700" />
               <span>Print Rx Slip</span>
             </button>
 
+            {/* Accept & Save to EMR Button */}
             <button
               id="btn-accept-save-emr"
               type="button"
               onClick={handleSaveEMR}
-              className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs sm:text-sm rounded-xl shadow-md flex items-center gap-2 cursor-pointer transition-transform active:scale-95"
+              className="px-4 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs sm:text-sm rounded-xl shadow-xs flex items-center gap-2 cursor-pointer transition-transform active:scale-95"
             >
               <Save className="w-4 h-4" />
               <span>Accept & Save to EMR</span>
             </button>
+
+            {/* Mark as Diagnosed / Treated Action Button */}
+            {isCompleted ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  id="btn-status-completed-indicator"
+                  className="px-4 py-2.5 bg-emerald-700 text-white font-black text-xs sm:text-sm rounded-xl shadow-xs flex items-center gap-2 cursor-default"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>Diagnosed & Treated</span>
+                </button>
+                <button
+                  type="button"
+                  id="btn-reopen-to-queue"
+                  onClick={handleReopenToQueue}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 flex items-center gap-1 cursor-pointer"
+                  title="Move back to Active Queue"
+                >
+                  <Undo2 className="w-3.5 h-3.5" />
+                  <span>Reopen</span>
+                </button>
+              </div>
+            ) : (
+              <button
+                id="btn-mark-diagnosed-treated"
+                type="button"
+                onClick={handleMarkDiagnosed}
+                disabled={isMarkingDiagnosed}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs sm:text-sm rounded-xl shadow-md flex items-center gap-2 cursor-pointer transition-transform active:scale-95 disabled:opacity-75"
+              >
+                <CheckSquare className="w-4 h-4" />
+                <span>{isMarkingDiagnosed ? 'Marking Complete...' : 'Mark as Diagnosed / Treated'}</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -251,11 +339,29 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
           </div>
         </div>
 
-        {/* Live Saved Banner feedback */}
+        {/* Feedback Banners */}
         {savedSuccess && (
-          <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center gap-2 text-xs sm:text-sm font-bold text-emerald-900 animate-fadeIn">
-            <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" />
+          <div className="p-3 bg-blue-50 border border-blue-300 rounded-xl flex items-center gap-2 text-xs sm:text-sm font-bold text-blue-900 animate-fadeIn">
+            <CheckCircle2 className="w-5 h-5 text-blue-700 shrink-0" />
             <span>Clinical history verified & committed to Hospital Electronic Medical Record (EMR).</span>
+          </div>
+        )}
+
+        {diagnosedSuccess && (
+          <div className="p-3.5 bg-emerald-50 border-2 border-emerald-400 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs sm:text-sm font-bold text-emerald-950 animate-fadeIn">
+            <div className="flex items-center gap-2.5">
+              <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" />
+              <span>
+                Patient consultation is marked as <strong>Diagnosed & Treated</strong> and moved to <strong>Today's Patients</strong> archive.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={onBackToQueue}
+              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-black self-start sm:self-auto cursor-pointer"
+            >
+              Return to Queue
+            </button>
           </div>
         )}
 
@@ -493,6 +599,33 @@ export const DoctorSummaryDetail: React.FC<DoctorSummaryDetailProps> = ({
                 placeholder="Type examination findings, Rx prescription, or diagnostic orders here..."
                 className="w-full p-3 bg-white rounded-lg border-2 border-cyan-400 text-sm font-medium text-slate-900 focus:ring-4 focus:ring-cyan-100"
               />
+
+              <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
+                <span className="text-[11px] text-slate-500 font-medium">
+                  {isCompleted ? '✓ Consultation marked complete and archived in Today’s Patients' : 'Consultation in progress'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSaveEMR}
+                    className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>Save Notes</span>
+                  </button>
+                  {!isCompleted && (
+                    <button
+                      type="button"
+                      onClick={handleMarkDiagnosed}
+                      disabled={isMarkingDiagnosed}
+                      className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-75"
+                    >
+                      <CheckSquare className="w-3.5 h-3.5" />
+                      <span>{isMarkingDiagnosed ? 'Completing...' : 'Mark as Diagnosed / Treated'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
         </div>

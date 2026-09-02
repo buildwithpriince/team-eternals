@@ -1,4 +1,5 @@
 import { BackendQuestionContract, SectionKey, Department, AppLanguage } from '../types';
+import { isExclusiveOption } from './optionUtils';
 
 export interface StructuredTurnRecord {
   turn_number: number;
@@ -34,6 +35,7 @@ export interface InterviewNextTurnResponse {
     text_hi: string;
     red_flag?: boolean;
     red_flag_reason?: string;
+    exclusive?: boolean;
   }>;
   section: SectionKey;
   symptom_tags: string[];
@@ -225,7 +227,7 @@ export function getDeterministicFallbackQuestion(
           { id: "chest_sweating_dyspnea", text_en: "Yes — Cold profuse sweating and shortness of breath", text_hi: "हां — अत्यधिक ठंडा पसीना और सांस लेने में कठिनाई", red_flag: true, red_flag_reason: "Cardiogenic / Acute Coronary Syndrome Warning Sign" },
           { id: "chest_palpitations", text_en: "Fast racing heartbeats (Palpitations)", text_hi: "दिल की धड़कन बहुत तेज चलना (घबराहट)" },
           { id: "chest_cough", text_en: "Dry or phlegmy cough with mild chest tightness", text_hi: "खांसी और सीने में जकड़न" },
-          { id: "chest_none_assoc", text_en: "No sweating, no breathlessness, no palpitations", text_hi: "नहीं — न पसीना है, न सांस फूल रही है" }
+          { id: "chest_none_assoc", text_en: "No sweating, no breathlessness, no palpitations", text_hi: "नहीं — न पसीना है, न सांस फूल रही है", exclusive: true }
         ],
         section: "hpi",
         symptom_tags: ["diaphoresis", "dyspnea", "palpitations"],
@@ -266,7 +268,7 @@ export function getDeterministicFallbackQuestion(
         { id: "assoc_vomit_black", text_en: "Vomiting blood or black dark stools", text_hi: "उल्टी में खून आना या काला मल होना", red_flag: true, red_flag_reason: "Suspected Upper GI Bleed" },
         { id: "assoc_dizzy_faint", text_en: "Severe dizziness, blackouts, or sudden fainting", text_hi: "चक्कर आकर अंधेरा छाना या बेहोशी", red_flag: true, red_flag_reason: "Syncope / Hemodynamic Instability" },
         { id: "assoc_mild_nausea", text_en: "Mild nausea or loss of appetite", text_hi: "जी मिचलाना या भूख कम लगना" },
-        { id: "assoc_none", text_en: "No other associated symptoms (None of these)", text_hi: "इनमें से कोई अन्य लक्षण नहीं है" }
+        { id: "assoc_none", text_en: "No other associated symptoms (None of these)", text_hi: "इनमें से कोई अन्य लक्षण नहीं है", exclusive: true }
       ],
       section: "hpi",
       symptom_tags: ["associated_symptoms"],
@@ -285,7 +287,7 @@ export function getDeterministicFallbackQuestion(
       question_hi: "क्या आपको पहले से कोई पुरानी बीमारी जैसे ब्लड प्रेशर, शुगर (डायबिटीज) या दिल की बीमारी है?",
       input_type: "single_select",
       options: [
-        { id: "pmh_none", text_en: "No known long-term illness", text_hi: "कोई पुरानी बीमारी नहीं है" },
+        { id: "pmh_none", text_en: "No known long-term illness", text_hi: "कोई पुरानी बीमारी नहीं है", exclusive: true },
         { id: "pmh_htn_dm", text_en: "High Blood Pressure or Diabetes", text_hi: "हाई ब्लड प्रेशर या शुगर (मधुमेह)" },
         { id: "pmh_heart_stent", text_en: "Prior Heart Attack, Heart Stent, or Bypass Surgery", text_hi: "पूर्व में हार्ट अटैक, स्टेंट या बाईपास सर्जरी हुई है", red_flag: true, red_flag_reason: "Known Ischemic Heart Disease with Acute Symptoms" },
         { id: "pmh_prior_surg", text_en: "Asthma, Kidney disease, or prior major surgery", text_hi: "दमा, गुर्दे की बीमारी या पूर्व में कोई बड़ा ऑपरेशन" }
@@ -307,7 +309,7 @@ export function getDeterministicFallbackQuestion(
       question_hi: "क्या आप नियमित दवाइयां ले रहे हैं, या किसी दवा से कोई एलर्जी है?",
       input_type: "single_select",
       options: [
-        { id: "med_none", text_en: "No regular medications and No drug allergies (NKDA)", text_hi: "कोई नियमित दवा नहीं और कोई दवा एलर्जी नहीं" },
+        { id: "med_none", text_en: "No regular medications and No drug allergies (NKDA)", text_hi: "कोई नियमित दवा नहीं और कोई दवा एलर्जी नहीं", exclusive: true },
         { id: "med_regular", text_en: "Taking regular daily prescriptions (BP/Diabetes/Thyroid/Blood Thinners)", text_hi: "नियमित दवाइयां ले रहे हैं (बीपी/शुगर/थायराइड/खून पतला करने वाली)" },
         { id: "med_allergy_penicillin", text_en: "Allergy to Penicillin / Sulfa / Painkillers (NSAIDs)", text_hi: "पेनिसिलिन, सल्फा या दर्द निवारक दवाओं से एलर्जी है" },
         { id: "med_ayurvedic", text_en: "Taking Ayurvedic, Homeopathic or herbal supplements", text_hi: "आयुर्वेदिक, होम्योपैथिक या हर्बल दवाइयां ले रहे हैं" }
@@ -329,7 +331,7 @@ export function getDeterministicFallbackQuestion(
       question_hi: "क्या आपके परिवार में माता-पिता या भाई-बहन को हृदय रोग या शुगर की बीमारी है?",
       input_type: "single_select",
       options: [
-        { id: "fam_none", text_en: "No major hereditary illness in family", text_hi: "परिवार में कोई गंभीर अनुवांशिक बीमारी नहीं है" },
+        { id: "fam_none", text_en: "No major hereditary illness in family", text_hi: "परिवार में कोई गंभीर अनुवांशिक बीमारी नहीं है", exclusive: true },
         { id: "fam_heart", text_en: "Heart attack or heart stent at early age in parents/siblings", text_hi: "परिवार में कम उम्र में हार्ट अटैक या दिल की बीमारी" },
         { id: "fam_dm_htn", text_en: "Diabetes or Hypertension runs in family", text_hi: "माता-पिता में शुगर या हाई बीपी की समस्या" },
         { id: "fam_asthma", text_en: "Asthma or severe allergies in family", text_hi: "परिवार में दमा (अस्थमा) या एलर्जी" }
@@ -351,7 +353,7 @@ export function getDeterministicFallbackQuestion(
       question_hi: "क्या आप धूम्रपान (बीड़ी/सिगरेट), तंबाकू, गुटखा या शराब का सेवन करते हैं?",
       input_type: "single_select",
       options: [
-        { id: "hab_none", text_en: "Non-smoker, Non-alcoholic (Vegetarian / Regular diet)", text_hi: "कोई नशा नहीं (शाकाहारी / सामान्य भोजन)" },
+        { id: "hab_none", text_en: "Non-smoker, Non-alcoholic (Vegetarian / Regular diet)", text_hi: "कोई नशा नहीं (शाकाहारी / सामान्य भोजन)", exclusive: true },
         { id: "hab_smoke", text_en: "Smoking / Bidi or Tobacco chewing habit", text_hi: "बीड़ी, सिगरेट या तंबाकू / गुटखा का सेवन" },
         { id: "hab_alcohol", text_en: "Occasional or regular alcohol consumption", text_hi: "शराब का सेवन करते हैं" },
         { id: "hab_stress", text_en: "High work stress and disturbed night sleep", text_hi: "काम का बहुत तनाव और रात में नींद न आना" }
@@ -394,7 +396,7 @@ export function getDeterministicFallbackQuestion(
     question_hi: "क्या आपको बुखार, अचानक वजन कम होना या पैरों में सूजन जैसा कोई अन्य लक्षण है?",
     input_type: "single_select",
     options: [
-      { id: "ros_none", text_en: "None of these (No fever, swelling, or weight loss)", text_hi: "इनमें से कोई नहीं (बुखार, सूजन या वजन घटना नहीं है)" },
+      { id: "ros_none", text_en: "None of these (No fever, swelling, or weight loss)", text_hi: "इनमें से कोई नहीं (बुखार, सूजन या वजन घटना नहीं है)", exclusive: true },
       { id: "ros_fever", text_en: "Mild fever or night chills", text_hi: "हल्का बुखार या रात में ठंड लगना" },
       { id: "ros_swelling", text_en: "Swelling in feet or around eyes", text_hi: "पैरों में या आंखों के आसपास सूजन" },
       { id: "ros_fatigue", text_en: "Severe general fatigue and weakness", text_hi: "अत्यधिक कमजोरी व थकान महसूस होना" }
@@ -449,13 +451,20 @@ export async function fetchNextInterviewTurn(params: {
         question_en: data.question_en,
         question_hi: data.question_hi || data.question_en,
         input_type: data.input_type || 'single_select',
-        options: data.options.map((opt: any, idx: number) => ({
-          id: opt.id || `opt_${idx}`,
-          text_en: opt.text_en || opt.text || '',
-          text_hi: opt.text_hi || opt.text_en || opt.text || '',
-          red_flag: !!opt.red_flag,
-          red_flag_reason: opt.red_flag_reason,
-        })),
+        options: data.options.map((opt: any, idx: number) => {
+          const rawOption = {
+            id: opt.id || `opt_${idx}`,
+            text_en: opt.text_en || opt.text || '',
+            text_hi: opt.text_hi || opt.text_en || opt.text || '',
+            red_flag: !!opt.red_flag,
+            red_flag_reason: opt.red_flag_reason,
+            exclusive: opt.exclusive,
+          };
+          return {
+            ...rawOption,
+            exclusive: typeof opt.exclusive === 'boolean' ? opt.exclusive : isExclusiveOption(rawOption),
+          };
+        }),
         section: data.section || 'chief_complaint',
         symptom_tags: Array.isArray(data.symptom_tags) ? data.symptom_tags : [],
         section_complete: !!data.section_complete,

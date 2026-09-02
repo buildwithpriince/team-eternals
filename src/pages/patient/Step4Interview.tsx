@@ -17,6 +17,11 @@ import { BackendQuestionContract, QuestionOption, SectionKey } from '../../types
 import { speechService } from '../../utils/speech';
 import { matchVoiceToOptions, matchSemanticsLocally } from '../../utils/aiMatcher';
 import {
+  toggleMultiSelectOption,
+  resolveMultiSelectVoiceIds,
+  isExclusiveOption,
+} from '../../utils/optionUtils';
+import {
   fetchNextInterviewTurn,
   getDeterministicFallbackQuestion,
   StructuredAccumulatorState,
@@ -176,30 +181,14 @@ export const Step4Interview: React.FC = () => {
       setCustomFreeText('');
 
       if (currentQuestion.input_type === 'multi_select') {
-        const isNoneOption =
-          option.id.includes('none') ||
-          option.id.includes('no') ||
-          option.id === 'surg_no';
-
-        if (isNoneOption) {
-          setSelectedOptionIds((prev) => (prev.includes(option.id) ? [] : [option.id]));
-        } else {
-          setSelectedOptionIds((prev) => {
-            const withoutNone = prev.filter(
-              (id) => !id.includes('none') && !id.includes('no') && id !== 'surg_no'
-            );
-            if (withoutNone.includes(option.id)) {
-              return withoutNone.filter((id) => id !== option.id);
-            } else {
-              return [...withoutNone, option.id];
-            }
-          });
-        }
+        setSelectedOptionIds((prev) =>
+          toggleMultiSelectOption(currentQuestion.options || [], prev, option)
+        );
       } else {
         setCurrentSelected(option.id);
       }
     },
-    [currentQuestion.input_type]
+    [currentQuestion.options, currentQuestion.input_type]
   );
 
   // Handle Speech-to-Text and Gemini AI Option Matching Flow
@@ -277,13 +266,9 @@ export const Step4Interview: React.FC = () => {
               );
               if (matchedOpts.length > 0) {
                 setCustomFreeText('');
-                setSelectedOptionIds((prev) => {
-                  const newIds = matchedOpts.map((o) => o.id);
-                  const containsNone = newIds.some((id) => id.includes('none'));
-                  if (containsNone) return newIds.filter((id) => id.includes('none'));
-                  const withoutNone = prev.filter((id) => !id.includes('none'));
-                  return Array.from(new Set([...withoutNone, ...newIds]));
-                });
+                setSelectedOptionIds((prev) =>
+                  resolveMultiSelectVoiceIds(currentQuestion.options || [], prev, matchedOpts)
+                );
                 const names = matchedOpts
                   .map((o) => (language === 'hi' ? o.text_hi : o.text_en))
                   .join(', ');
@@ -341,8 +326,7 @@ export const Step4Interview: React.FC = () => {
 
             if (
               matchResult.matchedIds &&
-              matchResult.matchedIds.length > 0 &&
-              !matchResult.matchedIds.includes('none')
+              matchResult.matchedIds.length > 0
             ) {
               const matchedOptions = currentQuestion.options.filter((opt) =>
                 matchResult.matchedIds.includes(opt.id)
@@ -351,13 +335,9 @@ export const Step4Interview: React.FC = () => {
               if (matchedOptions.length > 0) {
                 setCustomFreeText('');
                 if (currentQuestion.input_type === 'multi_select') {
-                  setSelectedOptionIds((prev) => {
-                    const newIds = matchedOptions.map((o) => o.id);
-                    const containsNone = newIds.some((id) => id.includes('none'));
-                    if (containsNone) return newIds.filter((id) => id.includes('none'));
-                    const withoutNone = prev.filter((id) => !id.includes('none'));
-                    return Array.from(new Set([...withoutNone, ...newIds]));
-                  });
+                  setSelectedOptionIds((prev) =>
+                    resolveMultiSelectVoiceIds(currentQuestion.options || [], prev, matchedOptions)
+                  );
                 } else {
                   handleSelectOption(matchedOptions[0]);
                 }

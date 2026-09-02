@@ -5,6 +5,7 @@ import { OptionChip } from './OptionChip';
 import { VoicePrompter } from './VoicePrompter';
 import { useApp } from '../context/AppContext';
 import { matchVoiceToOptions, matchSemanticsLocally } from '../utils/aiMatcher';
+import { toggleMultiSelectOption, resolveMultiSelectVoiceIds } from '../utils/optionUtils';
 import { speechService } from '../utils/speech';
 
 interface QuestionCardProps {
@@ -49,27 +50,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
 
   const handleSelectOption = (option: QuestionOption) => {
     if (question.input_type === 'multi_select') {
-      const isNoneOption =
-        option.id.includes('none') ||
-        option.id.includes('no') ||
-        option.id === 'surg_no';
-
-      if (isNoneOption) {
-        setSelectedOptionIds((prev) =>
-          prev.includes(option.id) ? [] : [option.id]
-        );
-      } else {
-        setSelectedOptionIds((prev) => {
-          const withoutNone = prev.filter(
-            (id) => !id.includes('none') && !id.includes('no') && id !== 'surg_no'
-          );
-          if (withoutNone.includes(option.id)) {
-            return withoutNone.filter((id) => id !== option.id);
-          } else {
-            return [...withoutNone, option.id];
-          }
-        });
-      }
+      setSelectedOptionIds((prev) =>
+        toggleMultiSelectOption(question.options || [], prev, option)
+      );
     } else {
       setCurrentSelected(option.id);
     }
@@ -95,10 +78,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         const matched = question.options.filter((opt) => localSemantic.matchedIds.includes(opt.id));
         if (matched.length > 0) {
           if (activeQuestionIdRef.current !== targetQId) return;
-          setSelectedOptionIds((prev) => {
-            const newIds = matched.map((o) => o.id);
-            return Array.from(new Set([...prev.filter((id) => !id.includes('none')), ...newIds]));
-          });
+          setSelectedOptionIds((prev) =>
+            resolveMultiSelectVoiceIds(question.options || [], prev, matched)
+          );
           const names = matched.map((o) => (language === 'hi' ? o.text_hi : o.text_en)).join(', ');
           setVoiceStatus(language === 'hi' ? `चयनित: ${names}` : `Matched: ${names}`);
           speechService.playChime('success');
@@ -143,10 +125,9 @@ export const QuestionCard: React.FC<QuestionCardProps> = ({
         const matched = question.options.filter((o) => matchResult.matchedIds.includes(o.id));
         if (matched.length > 0) {
           if (question.input_type === 'multi_select') {
-            setSelectedOptionIds((prev) => {
-              const newIds = matched.map((o) => o.id);
-              return Array.from(new Set([...prev.filter((id) => !id.includes('none')), ...newIds]));
-            });
+            setSelectedOptionIds((prev) =>
+              resolveMultiSelectVoiceIds(question.options || [], prev, matched)
+            );
           } else {
             handleSelectOption(matched[0]);
           }

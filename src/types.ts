@@ -20,6 +20,7 @@ export interface QuestionOption {
   red_flag?: boolean;
   red_flag_reason?: string;
   symptom_detail?: string;
+  exclusive?: boolean;
 }
 
 export interface BackendQuestionContract {
@@ -122,6 +123,8 @@ export interface PatientRecord {
   doctorSummary?: DoctorSummaryData;
   physicianNotes?: string;
   doctorApproved?: boolean;
+  consultationTime?: string;
+  consultationOutcome?: string;
 }
 
 export interface RedFlagAlert {

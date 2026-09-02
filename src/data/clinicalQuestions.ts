@@ -75,7 +75,7 @@ export const generalClinicalQuestions: BackendQuestionContract[] = [
     audio_prompt_en: 'Please review these warning signs carefully.',
     audio_prompt_hi: 'कृपया इन गंभीर लक्षणों को ध्यान से देखें।',
     options: [
-      { id: 'rf_none', text_en: 'None of these warning signs apply to me', text_hi: 'मुझे इनमें से कोई गंभीर लक्षण नहीं है' },
+      { id: 'rf_none', text_en: 'None of these warning signs apply to me', text_hi: 'मुझे इनमें से कोई गंभीर लक्षण नहीं है', exclusive: true },
       { id: 'rf_chest_arm', text_en: 'Crushing chest pain radiating to left arm/jaw', text_hi: 'सीने में जकड़न जो बाएं हाथ या जबड़े तक फैल रही है', red_flag: true, red_flag_reason: 'Suspected Acute Myocardial Infarction' },
       { id: 'rf_breath_rest', text_en: 'Severe breathlessness even while sitting still', text_hi: 'बैठे रहने पर भी सांस फूलना या दम घुटना', red_flag: true, red_flag_reason: 'Acute respiratory distress / Low SpO2 warning' },
       { id: 'rf_speech_weak', text_en: 'Sudden weakness on one side of face or body / Slurred speech', text_hi: 'चेहरे या हाथ-पैर में अचानक कमजोरी / बोली लड़खड़ाना', red_flag: true, red_flag_reason: 'Suspected Acute Stroke / TIA' },
@@ -96,7 +96,7 @@ export const generalClinicalQuestions: BackendQuestionContract[] = [
     audio_prompt_en: 'Select any known conditions like Diabetes or Blood Pressure.',
     audio_prompt_hi: 'यदि आपको शुगर, बीपी या कोई अन्य बीमारी है तो बताएं।',
     options: [
-      { id: 'pmh_none', text_en: 'No known chronic medical history', text_hi: 'कोई पुरानी बीमारी नहीं है' },
+      { id: 'pmh_none', text_en: 'No known chronic medical history', text_hi: 'कोई पुरानी बीमारी नहीं है', exclusive: true },
       { id: 'pmh_diabetes_bp', text_en: 'High Blood Pressure (Hypertension) or Diabetes', text_hi: 'हाई ब्लड प्रेशर या शुगर (मधुमेह)' },
       { id: 'pmh_heart', text_en: 'Heart disease / Prior heart stent or bypass', text_hi: 'हृदय रोग / पूर्व में स्टेंट या बाईपास' },
       { id: 'pmh_asthma_tb', text_en: 'Asthma / Respiratory condition / Past TB', text_hi: 'अस्थमा / दमा / पूर्व में टीबी' },
@@ -113,7 +113,7 @@ export const generalClinicalQuestions: BackendQuestionContract[] = [
     section_complete: true,
     interview_complete: false,
     options: [
-      { id: 'surg_no', text_en: 'No surgeries or hospitalizations', text_hi: 'नहीं, कोई ऑपरेशन नहीं हुआ' },
+      { id: 'surg_no', text_en: 'No surgeries or hospitalizations', text_hi: 'नहीं, कोई ऑपरेशन नहीं हुआ', exclusive: true },
       { id: 'surg_recent', text_en: 'Yes, had surgery within the past 6 months', text_hi: 'हां, पिछले 6 महीनों के भीतर ऑपरेशन हुआ' },
       { id: 'surg_older', text_en: 'Yes, surgery over 1–2 years ago', text_hi: 'हां, 1 से 2 साल पहले ऑपरेशन हुआ था' },
     ],
@@ -132,7 +132,7 @@ export const generalClinicalQuestions: BackendQuestionContract[] = [
     audio_prompt_en: 'Do you have any medicine allergies?',
     audio_prompt_hi: 'क्या किसी दवा से खुजली या एलर्जी होती है?',
     options: [
-      { id: 'alg_none', text_en: 'No known medicine allergies (NKDA)', text_hi: 'किसी दवा से कोई एलर्जी नहीं है' },
+      { id: 'alg_none', text_en: 'No known medicine allergies (NKDA)', text_hi: 'किसी दवा से कोई एलर्जी नहीं है', exclusive: true },
       { id: 'alg_penicillin', text_en: 'Allergic to Penicillin / Amoxicillin', text_hi: 'पेनिसिलिन / एमोक्सिसिलिन से एलर्जी है' },
       { id: 'alg_painkillers', text_en: 'Allergic to Painkillers (NSAIDs / Paracetamol / Brufen)', text_hi: 'दर्द निवारक दवाओं (जैसे ब्रूफेन आदि) से एलर्जी' },
       { id: 'alg_other', text_en: 'Allergic to sulfa drugs or specific injections', text_hi: 'सल्फा दवा या किसी खास इंजेक्शन से एलर्जी' },
@@ -150,7 +150,7 @@ export const generalClinicalQuestions: BackendQuestionContract[] = [
     section_complete: true,
     interview_complete: false,
     options: [
-      { id: 'hab_none', text_en: 'No tobacco/alcohol, no known early family illness', text_hi: 'कोई नशा नहीं, परिवार में कोई गंभीर बीमारी नहीं' },
+      { id: 'hab_none', text_en: 'No tobacco/alcohol, no known early family illness', text_hi: 'कोई नशा नहीं, परिवार में कोई गंभीर बीमारी नहीं', exclusive: true },
       { id: 'hab_tobacco', text_en: 'Chew tobacco / Bidi / Cigarette smoker', text_hi: 'तंबाकू / गुटखा / बीड़ी या सिगरेट का सेवन' },
       { id: 'fam_heart_diabetes', text_en: 'Strong family history of Diabetes or Heart attacks', text_hi: 'परिवार में माता/पिता को शुगर या हार्ट अटैक का इतिहास' },
       { id: 'hab_both', text_en: 'Both tobacco use and family history of chronic illness', text_hi: 'तंबाकू का सेवन और परिवार में बीमारी का इतिहास दोनों' },
@@ -170,7 +170,7 @@ export const generalClinicalQuestions: BackendQuestionContract[] = [
     audio_prompt_en: 'Any fever, loss of appetite, or swelling in feet?',
     audio_prompt_hi: 'क्या भूख कम लगना, चक्कर या पैरों में सूजन जैसी कोई और बात है?',
     options: [
-      { id: 'ros_none', text_en: 'No other symptoms, feeling normal otherwise', text_hi: 'अन्य कोई परेशानी नहीं है, बाकी सब सामान्य है' },
+      { id: 'ros_none', text_en: 'No other symptoms, feeling normal otherwise', text_hi: 'अन्य कोई परेशानी नहीं है, बाकी सब सामान्य है', exclusive: true },
       { id: 'ros_appetite_weight', text_en: 'Severe loss of appetite / unexplained weight loss', text_hi: 'भूख बिल्कुल न लगना / तेजी से वजन कम होना' },
       { id: 'ros_pedal_edema', text_en: 'Swelling in feet, ankles or face', text_hi: 'पैरों या टखनों में सूजन (सूज जाना)' },
       { id: 'ros_urinary_burning', text_en: 'Burning during urination or frequent night urination', text_hi: 'पेशाब में जलन या रात में बार-बार पेशाब आना' },
@@ -291,7 +291,7 @@ export const ayushClinicalQuestions: BackendQuestionContract[] = [
     interview_complete: true,
     ayush_only: true,
     options: [
-      { id: 'oushadha_none', text_en: 'Not taking any continuous medications', text_hi: 'कोई नियमित दवा नहीं ले रहे हैं' },
+      { id: 'oushadha_none', text_en: 'Not taking any continuous medications', text_hi: 'कोई नियमित दवा नहीं ले रहे हैं', exclusive: true },
       { id: 'oushadha_allopathy_bp_sugar', text_en: 'Taking Allopathic medications for BP / Diabetes / Thyroid', text_hi: 'बीपी, शुगर या थायराइड की अंग्रेजी दवाइयां चल रही हैं' },
       { id: 'oushadha_ayur_herbal', text_en: 'Taking Ayurvedic Kashayam / Asava / Churna or Bhasma', text_hi: 'आयुर्वेदिक काढ़ा, चूर्ण, क्वाथ या भस्म ले रहे हैं' },
       { id: 'oushadha_both', text_en: 'Taking both modern and traditional formulations simultaneously', text_hi: 'एलोपैथिक और आयुर्वेदिक दोनों दवाएं साथ में ले रहे हैं' },

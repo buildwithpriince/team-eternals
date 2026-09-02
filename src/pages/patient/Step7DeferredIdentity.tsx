@@ -105,7 +105,7 @@ export const Step7DeferredIdentity: React.FC = () => {
       } else if (digits.length === 12 && digits.startsWith('91')) {
         const ten = digits.slice(2);
         cleanPhone = `+91 ${ten.slice(0, 5)} ${ten.slice(5)}`;
-      } else if (!cleanPhone.startsWith('+')) {
+      } else if (!cleanPhone.startsWith('+') && digits.length >= 7) {
         cleanPhone = `+91 ${cleanPhone}`;
       }
     }

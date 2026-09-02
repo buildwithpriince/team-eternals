@@ -18,7 +18,7 @@ export const Step8QueueRouted: React.FC = () => {
   const [isPrinted, setIsPrinted] = useState(false);
   const [isSmsSent, setIsSmsSent] = useState(false);
 
-  const tokenNum = kioskPatient.tokenNumber || 'OPD-302';
+  const tokenNum = kioskPatient.tokenNumber || (kioskPatient.department === 'ayush' ? 'AYUSH-001' : 'OPD-001');
   const roomNum = kioskPatient.roomNumber || (kioskPatient.department === 'ayush' ? 'AYUSH Room 202' : 'OPD Room 104');
   const doctorName = kioskPatient.doctorAssigned || (kioskPatient.department === 'ayush' ? 'Dr. Ananya Vaidya, MD (Ayur)' : 'Dr. Rajesh Sharma, MD');
   const waitTime = (kioskPatient.redFlags && kioskPatient.redFlags.length > 0) ? 2 : (kioskPatient.waitTimeMin || 10);

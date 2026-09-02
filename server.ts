@@ -5,6 +5,7 @@ import { GoogleGenAI } from '@google/genai';
 import dotenv from 'dotenv';
 import { matchSemanticsLocally } from './src/utils/aiMatcher';
 import { getSupabaseServer, initializeSupabaseBackend } from './src/lib/supabaseServer';
+import { toValidUUID } from './src/utils/uuid';
 
 dotenv.config();
 
@@ -228,6 +229,7 @@ internal section label.
   7. Skin Rash, Itching or Allergy (त्वचा पर दाने, खुजली या एलर्जी)
   8. Recent Injury, Cut or Fall (हालिया चोट, घाव या गिरने से दर्द)
 - For all other questions, always provide 3–6 plausible short answer chips matching the question.
+- For placeholder or catch-all options like "None", "None of these", "No known history", "Not sure", "NKDA", always set "exclusive": true on that option so the UI ensures mutual exclusivity.
 - Always set "input_type" to "single_select" or "multi_select". Never omit the options array or default to free-text-only. (The client UI automatically renders both the tappable options grid AND an integrated free-text / voice entry box as a universal fallback for anything not listed).
 - Keep question phrasing at a 5th-grade reading level. No medical jargon
   ("radiating" becomes "does it move to another part of your body?").
@@ -267,7 +269,7 @@ internal section label.
       let generatedTurn: any = null;
 
       if (ai && Date.now() >= interviewRateLimitCooldownUntil) {
-        const candidateModels = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+        const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.7-flash', 'gemini-flash-latest'];
 
         for (const modelName of candidateModels) {
           try {
@@ -591,7 +593,7 @@ Return ONLY a valid JSON object matching this schema:
       let generatedSummary: any = null;
 
       if (ai && Date.now() >= summaryRateLimitCooldownUntil) {
-        const candidateModels = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+        const candidateModels = ['gemini-3.1-flash-lite', 'gemini-3.7-flash', 'gemini-flash-latest'];
 
         for (const modelName of candidateModels) {
           try {
@@ -777,7 +779,7 @@ Return ONLY a JSON object:
 
       if (ai && Date.now() >= matcherRateLimitCooldownUntil) {
         // Supported models for fast bilingual semantic classification
-        const fastModels = ['gemini-3.7-flash', 'gemini-3.1-flash-lite', 'gemini-flash-latest'];
+        const fastModels = ['gemini-3.1-flash-lite', 'gemini-3.7-flash', 'gemini-flash-latest'];
 
         for (const modelName of fastModels) {
           try {
@@ -856,6 +858,108 @@ Return ONLY a JSON object:
   });
 
   // =========================================================================
+  // ATOMIC SEQUENTIAL DAILY OPD TOKEN COUNTER
+  // =========================================================================
+  let lastTokenDate = '';
+  let currentDailySequence = 0;
+  let tokenLockPromise = Promise.resolve();
+
+  async function getNextDailyOpdToken(
+    prefix: string = 'OPD'
+  ): Promise<{ tokenNumber: string; sequenceNumber: number; date: string }> {
+    const acquireToken = async (): Promise<{ tokenNumber: string; sequenceNumber: number; date: string }> => {
+      const now = new Date();
+      // Use YYYY-MM-DD for daily rollover boundary
+      const todayStr = now.toISOString().slice(0, 10);
+      const supabase = getSupabaseServer();
+
+      // If midnight has passed (new calendar day), reset counter to 0
+      if (lastTokenDate !== todayStr) {
+        console.log(`[OPD Token Sequence] Daily rollover: Resetting counter for new day ${todayStr} (previous: ${lastTokenDate || 'none'})`);
+        lastTokenDate = todayStr;
+        currentDailySequence = 0;
+      }
+
+      // If counter is at 0 (e.g. fresh server start or new day), scan Supabase for today's highest allocated token
+      if (currentDailySequence === 0 && supabase) {
+        try {
+          const todayMidnight = new Date();
+          todayMidnight.setUTCHours(0, 0, 0, 0);
+
+          const { data: rows, error: scanErr } = await supabase
+            .from('interviews')
+            .select('opd_token, created_at')
+            .gte('created_at', todayMidnight.toISOString());
+
+          if (!scanErr && Array.isArray(rows) && rows.length > 0) {
+            let maxFound = 0;
+            const regex = new RegExp(`^${prefix}-(\\d+)`, 'i');
+            for (const r of rows) {
+              if (r.opd_token && typeof r.opd_token === 'string') {
+                const m = r.opd_token.match(regex);
+                if (m && m[1]) {
+                  const num = parseInt(m[1], 10);
+                  if (!isNaN(num) && num > maxFound) {
+                    maxFound = num;
+                  }
+                }
+              }
+            }
+            currentDailySequence = maxFound;
+            console.log(`[OPD Token Sequence] Initialized today's sequence from Supabase: starting at ${currentDailySequence}`);
+          }
+        } catch (dbErr) {
+          console.warn('[OPD Token Sequence] Error inspecting today max token in DB:', dbErr);
+        }
+      }
+
+      // Atomically increment counter
+      currentDailySequence += 1;
+      // Zero-pad to 3 digits (OPD-001 ... OPD-999), extending to 4 digits automatically past 999 (OPD-1000)
+      const padded = currentDailySequence < 1000
+        ? String(currentDailySequence).padStart(3, '0')
+        : String(currentDailySequence);
+      const tokenNumber = `${prefix}-${padded}`;
+
+      console.log(`[OPD Token Sequence] Allocated token: ${tokenNumber} (Seq #${currentDailySequence} for date ${todayStr})`);
+
+      return {
+        tokenNumber,
+        sequenceNumber: currentDailySequence,
+        date: todayStr,
+      };
+    };
+
+    // Chain execution onto the promise mutex to guarantee single-thread mutual exclusion
+    const currentLock = tokenLockPromise.then(acquireToken, acquireToken);
+    tokenLockPromise = currentLock.then(() => {}).catch(() => {});
+    return currentLock;
+  }
+
+  // Next OPD Token Allocation Endpoint
+  app.get('/api/tokens/next', async (req, res) => {
+    try {
+      const prefix = String(req.query.prefix || 'OPD').toUpperCase();
+      const result = await getNextDailyOpdToken(prefix);
+      res.json(result);
+    } catch (err) {
+      console.error('[SERVER /api/tokens/next] Error allocating token:', err);
+      res.status(500).json({ error: 'Failed to allocate sequential token' });
+    }
+  });
+
+  app.post('/api/tokens/next', async (req, res) => {
+    try {
+      const prefix = String(req.body.prefix || req.query.prefix || 'OPD').toUpperCase();
+      const result = await getNextDailyOpdToken(prefix);
+      res.json(result);
+    } catch (err) {
+      console.error('[SERVER /api/tokens/next] Error allocating token:', err);
+      res.status(500).json({ error: 'Failed to allocate sequential token' });
+    }
+  });
+
+  // =========================================================================
   // SUPABASE PERSISTENCE API ENDPOINTS (Interviews, Documents, Triage Queue)
   // =========================================================================
 
@@ -896,14 +1000,17 @@ Return ONLY a JSON object:
           id: patientId,
           language_pref: patientData.language || 'hi',
         };
-        if (patientData.name && patientData.name.trim() !== '') {
-          patientPayload.name = patientData.name.trim();
-        } else {
-          patientPayload.name = 'Anonymous Kiosk Patient';
+        // Only set name if a non-empty name is explicitly provided; do not set a placeholder that overwrites actual name
+        if (patientData.name && String(patientData.name).trim() !== '') {
+          patientPayload.name = String(patientData.name).trim();
         }
         if (parsedAge !== null) patientPayload.age = parsedAge;
-        if (patientData.phone) patientPayload.phone = String(patientData.phone).trim();
-        if (patientData.abhaId) patientPayload.abha_id = String(patientData.abhaId).trim();
+        if (patientData.phone && String(patientData.phone).trim() !== '') {
+          patientPayload.phone = String(patientData.phone).trim();
+        }
+        if (patientData.abhaId && String(patientData.abhaId).trim() !== '') {
+          patientPayload.abha_id = String(patientData.abhaId).trim();
+        }
 
         const { error: patientErr } = await supabase.from('patients').upsert(
           patientPayload,
@@ -1014,7 +1121,7 @@ Return ONLY a JSON object:
             ? parseInt(String(patientData.age).trim(), 10) || null
             : null;
 
-        const patientUpsertPayload = {
+        const patientUpsertPayload: any = {
           id: targetPatientId,
           name:
             patientData.name && String(patientData.name).trim() !== ''
@@ -1050,6 +1157,13 @@ Return ONLY a JSON object:
         }
       }
 
+      let finalOpdToken = opdToken;
+      const deptPrefix = patientData.department === 'ayush' ? 'AYUSH' : 'OPD';
+      if (!finalOpdToken || finalOpdToken === 'OPD-NEW' || finalOpdToken === 'OPD-REALTIME' || finalOpdToken === 'OPD-302') {
+        const tokenAlloc = await getNextDailyOpdToken(deptPrefix);
+        finalOpdToken = tokenAlloc.tokenNumber;
+      }
+
       const { data: updatedInterview, error: interviewErr } = await supabase
         .from('interviews')
         .update({
@@ -1059,7 +1173,7 @@ Return ONLY a JSON object:
           transcript: Array.isArray(transcript) ? transcript : [],
           red_flag: !!redFlag,
           red_flag_reason: redFlagReason || null,
-          opd_token: opdToken,
+          opd_token: finalOpdToken,
           updated_at: new Date().toISOString(),
         })
         .eq('id', interviewId)
@@ -1069,10 +1183,10 @@ Return ONLY a JSON object:
       if (interviewErr) {
         console.warn('[Supabase] Finalize interview warning:', interviewErr.message);
       } else {
-        console.log('[SERVER /api/interviews/summary] Interview updated in DB:', updatedInterview?.id);
+        console.log('[SERVER /api/interviews/summary] Interview updated in DB:', updatedInterview?.id, 'with token:', finalOpdToken);
       }
 
-      res.json({ success: true, interviewId, patientId: targetPatientId });
+      res.json({ success: true, interviewId, patientId: targetPatientId, opdToken: finalOpdToken });
     } catch (err) {
       console.error('[Supabase] Error finalizing interview summary:', err);
       res.status(500).json({ error: 'Failed to finalize interview summary' });
@@ -1163,6 +1277,115 @@ Return ONLY a JSON object:
     }
   });
 
+  // 4b. Update interview status (e.g. mark as diagnosed / completed)
+  app.post('/api/interviews/status', async (req, res) => {
+    try {
+      const {
+        interviewId,
+        patientId,
+        status = 'completed',
+        physicianNotes,
+        consultationOutcome,
+        consultationTime,
+        doctorSummary,
+        doctorApproved,
+      } = req.body;
+
+      const supabase = getSupabaseServer();
+      if (!supabase) {
+        res.json({ success: true, status });
+        return;
+      }
+
+      const targetId = toValidUUID(interviewId || patientId);
+      const nowIso = new Date().toISOString();
+
+      // Look up existing interview by id or patient_id
+      let { data: existingRow } = await supabase
+        .from('interviews')
+        .select('id, patient_id, structured_state, summary, opd_token, department')
+        .eq('id', targetId)
+        .maybeSingle();
+
+      if (!existingRow) {
+        const { data: byPatient } = await supabase
+          .from('interviews')
+          .select('id, patient_id, structured_state, summary, opd_token, department')
+          .eq('patient_id', targetId)
+          .order('updated_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        existingRow = byPatient;
+      }
+
+      const existingState = existingRow?.structured_state || {};
+      const updatedState = {
+        ...existingState,
+        consultation_time: consultationTime || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        consultation_outcome: consultationOutcome || physicianNotes || existingState.consultation_outcome || 'Consultation & treatment plan completed',
+        physician_notes: physicianNotes || existingState.physician_notes || '',
+      };
+
+      const updateData: any = {
+        status,
+        structured_state: updatedState,
+        updated_at: nowIso,
+      };
+
+      if (doctorSummary && Object.keys(doctorSummary).length > 0) {
+        updateData.summary = doctorSummary;
+      }
+
+      let updatedInterview = null;
+
+      if (existingRow?.id) {
+        const { data: updatedRows, error: updateErr } = await supabase
+          .from('interviews')
+          .update(updateData)
+          .eq('id', existingRow.id)
+          .select();
+
+        if (updateErr) {
+          console.warn('[Supabase] Error updating interview status by id:', updateErr.message);
+        } else if (updatedRows && updatedRows.length > 0) {
+          updatedInterview = updatedRows[0];
+          console.log(`[Supabase] Interview ${existingRow.id} status updated to '${status}' successfully`);
+        }
+      } else {
+        // If no interview row existed yet, upsert an interview row for this patient
+        const { data: insertedRows, error: insertErr } = await supabase
+          .from('interviews')
+          .upsert(
+            {
+              id: targetId,
+              patient_id: targetId,
+              status,
+              structured_state: updatedState,
+              summary: doctorSummary || {},
+              updated_at: nowIso,
+            },
+            { onConflict: 'id' }
+          )
+          .select();
+
+        if (insertErr) {
+          console.warn('[Supabase] Error upserting interview status:', insertErr.message);
+        } else if (insertedRows && insertedRows.length > 0) {
+          updatedInterview = insertedRows[0];
+        }
+      }
+
+      res.json({
+        success: true,
+        interview: updatedInterview,
+        status,
+      });
+    } catch (err) {
+      console.error('[Supabase] Error in /api/interviews/status:', err);
+      res.status(500).json({ error: 'Failed to update interview status' });
+    }
+  });
+
   // 5. Doctor Queue fetch endpoint with Supabase table join
   app.get('/api/doctor/queue', async (req, res) => {
     try {
@@ -1174,56 +1397,62 @@ Return ONLY a JSON object:
         return;
       }
 
-      let query = supabase
+      // Step 1: Fetch interviews
+      let interviewQuery = supabase
         .from('interviews')
-        .select(`
-          id,
-          patient_id,
-          department,
-          status,
-          structured_state,
-          transcript,
-          symptom_tags,
-          red_flag,
-          red_flag_reason,
-          summary,
-          opd_token,
-          assigned_doctor_id,
-          created_at,
-          updated_at,
-          patients (
-            id,
-            name,
-            age,
-            phone,
-            abha_id,
-            language_pref
-          ),
-          documents (
-            id,
-            storage_path,
-            extracted_data,
-            doc_type,
-            created_at
-          )
-        `)
+        .select('*')
         .order('updated_at', { ascending: false });
 
       if (department && department !== 'all') {
-        query = query.eq('department', department);
+        interviewQuery = interviewQuery.eq('department', department);
       }
 
-      const { data: rows, error } = await query;
-      if (error) {
-        console.warn('[Supabase] Queue fetch warning:', error.message);
-        res.json({ patients: [] });
-        return;
+      const { data: interviewRows, error: interviewError } = await interviewQuery;
+      if (interviewError) {
+        console.warn('[Supabase] Error querying interviews table:', interviewError.message);
       }
 
-      // Map Supabase rows to PatientRecord interface for frontend
-      const mappedPatients = (rows || []).map((row: any) => {
-        const pat = row.patients || {};
-        const docs = (row.documents || []).map((d: any) => ({
+      // Step 2: Fetch all patients from patients table
+      const { data: patientRows, error: patientError } = await supabase
+        .from('patients')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (patientError) {
+        console.warn('[Supabase] Error querying patients table:', patientError.message);
+      }
+
+      // Step 3: Fetch documents
+      const { data: documentRows } = await supabase
+        .from('documents')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      // Create lookup maps
+      const patientMap = new Map<string, any>();
+      (patientRows || []).forEach((p: any) => {
+        if (p.id) patientMap.set(p.id, p);
+      });
+
+      const docsByInterview = new Map<string, any[]>();
+      (documentRows || []).forEach((d: any) => {
+        if (d.interview_id) {
+          const arr = docsByInterview.get(d.interview_id) || [];
+          arr.push(d);
+          docsByInterview.set(d.interview_id, arr);
+        }
+      });
+
+      const mappedPatients: any[] = [];
+      const processedPatientIds = new Set<string>();
+
+      // Process all interviews
+      for (const row of interviewRows || []) {
+        const pat = (row.patient_id ? patientMap.get(row.patient_id) : null) || {};
+        if (row.patient_id) processedPatientIds.add(row.patient_id);
+        processedPatientIds.add(row.id);
+
+        const docs = (docsByInterview.get(row.id) || []).map((d: any) => ({
           id: d.id,
           title: d.doc_type ? `${d.doc_type.replace(/_/g, ' ').toUpperCase()}` : 'Uploaded Report',
           type: d.doc_type || 'prescription',
@@ -1244,18 +1473,18 @@ Return ONLY a JSON object:
               section: t.section || 'chief_complaint',
               answer_en: t.answer_en || '',
               answer_hi: t.answer_hi || '',
-              timestamp: t.timestamp || new Date(row.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              timestamp: t.timestamp || new Date(row.updated_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               is_red_flag: !!t.is_red_flag,
             };
           });
         }
 
-        const redFlagsList = [];
+        const redFlagsList: string[] = [];
         if (row.red_flag && row.red_flag_reason) {
           redFlagsList.push(row.red_flag_reason);
         }
 
-        const chiefComplaints = [];
+        const chiefComplaints: string[] = [];
         if (row.structured_state?.chief_complaint) {
           chiefComplaints.push(row.structured_state.chief_complaint);
         } else if (historyAnswers['chief_complaint']?.answer_en) {
@@ -1264,12 +1493,18 @@ Return ONLY a JSON object:
           chiefComplaints.push('General Consultation');
         }
 
-        return {
+        const isCompleted = row.status === 'completed';
+        const consultationTime = row.structured_state?.consultation_time || (isCompleted ? new Date(row.updated_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : undefined);
+        const consultationOutcome = row.structured_state?.consultation_outcome || (row.summary?.chiefComplaint ? `Diagnosis reviewed: ${row.summary.chiefComplaint}` : undefined);
+        const physicianNotes = row.structured_state?.physician_notes || '';
+
+        mappedPatients.push({
           id: row.id,
+          patientId: row.patient_id || row.id,
           tokenNumber: row.opd_token || `OPD-${row.id.slice(0, 4).toUpperCase()}`,
-          name: pat.name || 'Kiosk Patient',
-          age: pat.age || 45,
-          gender: 'male',
+          name: pat.name || row.structured_state?.patient_name || 'Kiosk Patient',
+          age: pat.age || row.structured_state?.patient_age || 45,
+          gender: pat.gender || 'male',
           phone: pat.phone || '+91 98000 00000',
           abhaId: pat.abha_id || '',
           department: row.department || 'general',
@@ -1280,13 +1515,46 @@ Return ONLY a JSON object:
           historyAnswers,
           scannedDocs: docs,
           status: row.status || 'waiting',
-          timestamp: new Date(row.updated_at || row.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp: new Date(row.created_at || row.updated_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           roomNumber: row.department === 'ayush' ? 'AYUSH Room 202' : 'OPD Room 104',
           waitTimeMin: row.red_flag ? 2 : 12,
           doctorAssigned: row.department === 'ayush' ? 'Dr. Ananya Vaidya, MD (Ayur)' : 'Dr. Rajesh Sharma, MD',
           doctorSummary: row.summary && Object.keys(row.summary).length > 0 ? row.summary : undefined,
-        };
-      });
+          physicianNotes,
+          consultationTime,
+          consultationOutcome,
+          doctorApproved: isCompleted || (row.summary && Object.keys(row.summary).length > 0),
+        });
+      }
+
+      // Step 4: Include any patients from patients table who do not have an interview record yet
+      for (const pat of patientRows || []) {
+        if (pat.id && !processedPatientIds.has(pat.id)) {
+          mappedPatients.push({
+            id: pat.id,
+            patientId: pat.id,
+            tokenNumber: `OPD-${pat.id.slice(0, 4).toUpperCase()}`,
+            name: pat.name || 'Registered Patient',
+            age: pat.age || 45,
+            gender: pat.gender || 'male',
+            phone: pat.phone || '',
+            abhaId: pat.abha_id || '',
+            department: 'general',
+            language: pat.language_pref || 'hi',
+            inputMode: 'touch',
+            redFlags: [],
+            chiefComplaints: ['OPD Registration'],
+            historyAnswers: {},
+            scannedDocs: [],
+            status: 'waiting',
+            timestamp: new Date(pat.created_at || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            roomNumber: 'OPD Room 104',
+            waitTimeMin: 12,
+            doctorAssigned: 'Dr. Rajesh Sharma, MD',
+            doctorApproved: false,
+          });
+        }
+      }
 
       res.json({ patients: mappedPatients });
     } catch (err) {

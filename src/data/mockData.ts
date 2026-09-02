@@ -90,7 +90,7 @@ export const initialMockPatients: PatientRecord[] = [
   // RED FLAGGED PATIENT (PINNED TO TOP)
   {
     id: 'pat_101',
-    tokenNumber: 'OPD-101',
+    tokenNumber: 'OPD-001',
     name: 'Ram Lal Sharma',
     age: 67,
     gender: 'male',
@@ -198,7 +198,7 @@ export const initialMockPatients: PatientRecord[] = [
   // PATIENT 2: AYUSH OPD
   {
     id: 'pat_102',
-    tokenNumber: 'AYUSH-204',
+    tokenNumber: 'AYUSH-001',
     name: 'Kamla Devi',
     age: 59,
     gender: 'female',
@@ -302,7 +302,7 @@ export const initialMockPatients: PatientRecord[] = [
   // PATIENT 3: GENERAL MEDICINE
   {
     id: 'pat_103',
-    tokenNumber: 'OPD-103',
+    tokenNumber: 'OPD-002',
     name: 'Sunita Mehra',
     age: 42,
     gender: 'female',
@@ -395,7 +395,7 @@ export const initialRedFlagAlerts: RedFlagAlert[] = [
     id: 'alert_1',
     patientId: 'pat_101',
     patientName: 'Ram Lal Sharma',
-    tokenNumber: 'OPD-101',
+    tokenNumber: 'OPD-001',
     flagReason: 'Crushing chest pain radiating to left arm / jaw with severe diaphoresis',
     department: 'general',
     severity: 'critical',

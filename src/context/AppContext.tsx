@@ -10,7 +10,7 @@ import {
   SectionKey,
   DoctorSummaryData,
 } from '../types';
-import { initialMockPatients, initialRedFlagAlerts, mockDoctors } from '../data/mockData';
+import { mockDoctors } from '../data/mockData';
 import { speechService } from '../utils/speech';
 import { themes, ThemeTokens } from '../themes/tokens';
 import {
@@ -24,6 +24,8 @@ import {
   finalizeInterviewInBackend,
   uploadDocumentToBackend,
   fetchQueueFromBackend,
+  fetchNextSequentialToken,
+  updateInterviewStatusInBackend,
 } from '../utils/supabaseSync';
 import { generateUUID } from '../utils/uuid';
 
@@ -79,9 +81,18 @@ interface AppContextType {
   loggedInDoctor: DoctorUser | null;
   setLoggedInDoctor: (doc: DoctorUser | null) => void;
   patients: PatientRecord[];
+  refreshQueue: () => Promise<void>;
   activeDoctorPatient: PatientRecord | null;
   setActiveDoctorPatient: (patient: PatientRecord | null) => void;
   updatePatientRecord: (patientId: string, updates: Partial<PatientRecord>) => void;
+  markPatientAsDiagnosed: (
+    patientId: string,
+    options?: {
+      outcome?: string;
+      notes?: string;
+      summary?: DoctorSummaryData;
+    }
+  ) => Promise<boolean>;
   redFlagAlerts: RedFlagAlert[];
   acknowledgeAlert: (alertId: string) => void;
   dismissAlert: (alertId: string) => void;
@@ -100,16 +111,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [autoVoiceEnabled, setAutoVoiceEnabled] = useState<boolean>(true);
   const [isGeneratingSummary, setIsGeneratingSummary] = useState<boolean>(false);
 
-  // Doctors & Patient Database
+  // Doctors & Patient Database (Strictly initialized empty, populated from real Supabase records)
   const [loggedInDoctor, setLoggedInDoctor] = useState<DoctorUser | null>(mockDoctors[0]);
-  const [patients, setPatients] = useState<PatientRecord[]>(initialMockPatients);
-  const [activeDoctorPatient, setActiveDoctorPatient] = useState<PatientRecord | null>(initialMockPatients[0]);
-  const [redFlagAlerts, setRedFlagAlerts] = useState<RedFlagAlert[]>(initialRedFlagAlerts);
+  const [patients, setPatients] = useState<PatientRecord[]>([]);
+  const [activeDoctorPatient, setActiveDoctorPatient] = useState<PatientRecord | null>(null);
+  const [redFlagAlerts, setRedFlagAlerts] = useState<RedFlagAlert[]>([]);
 
   // Current Patient being onboarded on Kiosk
   const [kioskPatient, setKioskPatient] = useState<Partial<PatientRecord>>({
     id: generateUUID(),
-    tokenNumber: `OPD-${Math.floor(100 + Math.random() * 900)}`,
+    tokenNumber: 'OPD-001',
     department: 'general',
     language: 'hi',
     inputMode: 'touch',
@@ -131,22 +142,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const theme = themes[department];
 
-  // Sync theme when department changes
+  // Fetch all live patient queue records from backend/Supabase
+  const refreshQueue = useCallback(async () => {
+    try {
+      const serverPatients = await fetchQueueFromBackend('all');
+      if (Array.isArray(serverPatients)) {
+        setPatients(serverPatients);
+        // Keep active patient in sync with server data
+        setActiveDoctorPatient((currentActive) => {
+          if (!currentActive) return null;
+          const matched = serverPatients.find(
+            (p) => p.id === currentActive.id || (p as any).patientId === currentActive.id
+          );
+          return matched || currentActive;
+        });
+      }
+    } catch (e) {
+      console.warn('[AppContext] Failed to refresh queue from Supabase backend:', e);
+    }
+  }, []);
+
+  // Sync theme and next sequential token when department changes
   useEffect(() => {
     setKioskPatient((prev) => ({ ...prev, department }));
-  }, [department]);
-
-  // Load live patient queue from Supabase / Backend on mount and department change
-  useEffect(() => {
-    fetchQueueFromBackend(department).then((serverPatients) => {
-      if (serverPatients && serverPatients.length > 0) {
-        setPatients(serverPatients);
-        if (!activeDoctorPatient) {
-          setActiveDoctorPatient(serverPatients[0]);
+    fetchNextSequentialToken(department).then((tok) => {
+      setKioskPatient((prev) => {
+        // Only update token if it hasn't been locked in or is default
+        if (!prev.tokenNumber || prev.tokenNumber.startsWith('OPD-') || prev.tokenNumber.startsWith('AYUSH-')) {
+          return { ...prev, tokenNumber: tok };
         }
-      }
+        return prev;
+      });
     });
   }, [department]);
+
+  // Load live patient queue from Supabase on mount and poll periodically
+  useEffect(() => {
+    refreshQueue();
+    const interval = setInterval(() => {
+      refreshQueue();
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [refreshQueue]);
 
   // Set up Supabase Realtime subscription on interviews table for live queue & red-flag alerts
   useEffect(() => {
@@ -181,12 +218,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               });
             }
 
-            // Live queue refresh
-            fetchQueueFromBackend(department).then((updatedList) => {
-              if (updatedList && updatedList.length > 0) {
-                setPatients(updatedList);
-              }
-            });
+            // Live queue refresh from backend
+            refreshQueue();
           }
         )
         .subscribe();
@@ -197,7 +230,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (realtimeErr) {
       console.warn('Supabase Realtime subscription notice:', realtimeErr);
     }
-  }, [department]);
+  }, [refreshQueue]);
 
   const updateKioskPatient = (updates: Partial<PatientRecord>) => {
     setKioskPatient((prev) => ({ ...prev, ...updates }));
@@ -341,10 +374,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resetKioskFlow = () => {
     speechService.stop();
     const tokenPrefix = department === 'ayush' ? 'AYUSH' : 'OPD';
-    const randomToken = `${tokenPrefix}-${Math.floor(200 + Math.random() * 800)}`;
     setKioskPatient({
       id: generateUUID(),
-      tokenNumber: randomToken,
+      tokenNumber: `${tokenPrefix}-001`,
       department,
       language,
       inputMode,
@@ -362,6 +394,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       roomNumber: department === 'ayush' ? 'AYUSH Room 202' : 'OPD Room 104',
       waitTimeMin: 12,
       doctorAssigned: department === 'ayush' ? 'Dr. Ananya Vaidya, MD (Ayur)' : 'Dr. Rajesh Sharma, MD',
+    });
+    fetchNextSequentialToken(department).then((tok) => {
+      setKioskPatient((prev) => ({ ...prev, tokenNumber: tok }));
     });
     setCurrentKioskStep(1);
   };
@@ -386,9 +421,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? parseInt(String(rawAge).trim(), 10) || null
         : null;
 
+    const tokenPrefix = (mergedPatient.department || department) === 'ayush' ? 'AYUSH' : 'OPD';
+    const initialToken = mergedPatient.tokenNumber || `${tokenPrefix}-001`;
+
     const finalRecord: PatientRecord = {
       id: patientId,
-      tokenNumber: mergedPatient.tokenNumber || `OPD-${Math.floor(100 + Math.random() * 900)}`,
+      tokenNumber: initialToken,
       name:
         mergedPatient.name && mergedPatient.name.trim() !== ''
           ? mergedPatient.name.trim()
@@ -437,10 +475,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setPatients((prev) => [finalRecord, ...prev.filter((p) => p.id !== finalRecord.id)]);
 
-    // Asynchronously finalize interview in Supabase backend
-    finalizeInterviewInBackend(finalRecord.id, finalRecord).catch((finErr) => {
-      console.warn('[Supabase Sync] Finalize interview warning:', finErr);
-    });
+    // Asynchronously finalize interview in Supabase backend & update confirmed token
+    finalizeInterviewInBackend(finalRecord.id, finalRecord)
+      .then((res) => {
+        if (res?.opdToken && res.opdToken !== finalRecord.tokenNumber) {
+          console.log('[AppContext] Updating patient with server-confirmed token:', res.opdToken);
+          updatePatientRecord(finalRecord.id, { tokenNumber: res.opdToken });
+          setKioskPatient((prev) => ({ ...prev, tokenNumber: res.opdToken }));
+        }
+      })
+      .catch((finErr) => {
+        console.warn('[Supabase Sync] Finalize interview warning:', finErr);
+      });
 
     // Asynchronously call Gemini (gemini-2.5-flash) to generate high-fidelity physician summary
     setIsGeneratingSummary(true);
@@ -525,6 +571,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (activeDoctorPatient && activeDoctorPatient.id === patientId) {
       setActiveDoctorPatient((prev) => (prev ? { ...prev, ...updates } : null));
     }
+
+    // If status or doctor approval or summary was updated, sync to backend
+    if (updates.status || updates.doctorApproved || updates.doctorSummary || updates.physicianNotes) {
+      updateInterviewStatusInBackend(patientId, updates.status || 'waiting', {
+        physicianNotes: updates.physicianNotes,
+        consultationOutcome: updates.consultationOutcome,
+        consultationTime: updates.consultationTime,
+        doctorSummary: updates.doctorSummary,
+        doctorApproved: updates.doctorApproved,
+      }).catch((err) => {
+        console.warn('[AppContext] Sync update to backend warning:', err);
+      });
+    }
+  };
+
+  const markPatientAsDiagnosed = async (
+    patientId: string,
+    options?: {
+      outcome?: string;
+      notes?: string;
+      summary?: DoctorSummaryData;
+    }
+  ): Promise<boolean> => {
+    const consultTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const outcomeText = options?.outcome || options?.notes || 'Consultation & Clinical Treatment Plan Completed';
+
+    const updates: Partial<PatientRecord> = {
+      status: 'completed',
+      doctorApproved: true,
+      consultationTime: consultTime,
+      consultationOutcome: outcomeText,
+      physicianNotes: options?.notes,
+    };
+    if (options?.summary) {
+      updates.doctorSummary = options.summary;
+    }
+
+    updatePatientRecord(patientId, updates);
+
+    const success = await updateInterviewStatusInBackend(patientId, 'completed', {
+      physicianNotes: options?.notes,
+      consultationOutcome: outcomeText,
+      consultationTime: consultTime,
+      doctorSummary: options?.summary,
+      doctorApproved: true,
+    });
+
+    return success;
   };
 
   const acknowledgeAlert = (alertId: string) => {
@@ -571,9 +665,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         loggedInDoctor,
         setLoggedInDoctor,
         patients,
+        refreshQueue,
         activeDoctorPatient,
         setActiveDoctorPatient,
         updatePatientRecord,
+        markPatientAsDiagnosed,
         redFlagAlerts,
         acknowledgeAlert,
         dismissAlert,

@@ -1,4 +1,5 @@
 import { QuestionOption, AppLanguage } from '../types';
+import { isExclusiveOption } from './optionUtils';
 
 export interface VoiceMatchResult {
   matchedIds: string[];
@@ -340,17 +341,7 @@ export function matchSemanticsLocally(
     lower.includes('koi operation nahi');
 
   if (isNegation) {
-    const noneOpt = options.find(
-      (o) =>
-        o.id.includes('none') ||
-        o.id.includes('no') ||
-        (o.text_en || '').toLowerCase().includes('none') ||
-        (o.text_en || '').toLowerCase().includes('no known') ||
-        (o.text_en || '').toLowerCase().includes('no surgeries') ||
-        (o.text_hi || '').includes('कोई नहीं') ||
-        (o.text_hi || '').includes('नहीं, कोई') ||
-        (o.text_hi || '').includes('नहीं है')
-    );
+    const noneOpt = options.find((o) => isExclusiveOption(o));
     if (noneOpt) {
       return {
         matchedIds: [noneOpt.id],
@@ -500,6 +491,7 @@ export async function matchVoiceToOptions(
           symptom_detail: opt.symptom_detail,
           red_flag: opt.red_flag,
           red_flag_reason: opt.red_flag_reason,
+          exclusive: typeof opt.exclusive === 'boolean' ? opt.exclusive : isExclusiveOption(opt),
         })),
         language,
       }),

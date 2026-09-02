@@ -71,11 +71,28 @@ export async function updateRedFlagInBackend(
   }
 }
 
+// Fetch next sequential OPD/AYUSH token from backend atomic counter
+export async function fetchNextSequentialToken(department: string = 'general'): Promise<string> {
+  const prefix = department === 'ayush' ? 'AYUSH' : 'OPD';
+  try {
+    const res = await fetch(`/api/tokens/next?prefix=${prefix}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.tokenNumber) {
+        return data.tokenNumber;
+      }
+    }
+  } catch (err) {
+    console.warn('[SupabaseSync] Error fetching next sequential token:', err);
+  }
+  return `${prefix}-001`;
+}
+
 // Complete interview and save final summary
 export async function finalizeInterviewInBackend(
   interviewId: string,
   patientRecord: PatientRecord
-): Promise<boolean> {
+): Promise<{ success: boolean; opdToken?: string }> {
   const validInterviewId = toValidUUID(interviewId);
   const validPatientId = toValidUUID(patientRecord.id || interviewId);
 
@@ -86,17 +103,22 @@ export async function finalizeInterviewInBackend(
       ? parseInt(String(patientRecord.age).trim(), 10) || null
       : null;
 
+  const capturedName =
+    patientRecord.name && String(patientRecord.name).trim() !== ''
+      ? String(patientRecord.name).trim()
+      : null;
+
   const payload = {
     interviewId: validInterviewId,
     patientId: validPatientId,
     status: 'waiting',
     summary: patientRecord.doctorSummary,
     patientData: {
-      name: patientRecord.name ? String(patientRecord.name).trim() : null,
+      name: capturedName,
       age: parsedAge,
       gender: patientRecord.gender,
-      phone: patientRecord.phone ? String(patientRecord.phone).trim() : null,
-      abhaId: patientRecord.abhaId ? String(patientRecord.abhaId).trim() : null,
+      phone: patientRecord.phone && String(patientRecord.phone).trim() !== '' ? String(patientRecord.phone).trim() : null,
+      abhaId: patientRecord.abhaId && String(patientRecord.abhaId).trim() !== '' ? String(patientRecord.abhaId).trim() : null,
       language: patientRecord.language,
       department: patientRecord.department,
     },
@@ -106,7 +128,14 @@ export async function finalizeInterviewInBackend(
     opdToken: patientRecord.tokenNumber,
   };
 
-  console.log('[SupabaseSync] finalizeInterviewInBackend dispatching payload:', JSON.stringify(payload, null, 2));
+  console.log('[SupabaseSync] finalizeInterviewInBackend payload prepared:', {
+    nameCaptured: capturedName,
+    ageCaptured: parsedAge,
+    phoneCaptured: payload.patientData.phone,
+    patientId: payload.patientId,
+    interviewId: payload.interviewId,
+    opdToken: payload.opdToken,
+  });
 
   try {
     const res = await fetch('/api/interviews/summary', {
@@ -117,13 +146,14 @@ export async function finalizeInterviewInBackend(
     if (res.ok) {
       const data = await res.json();
       console.log('[SupabaseSync] /api/interviews/summary response success:', data);
+      return { success: true, opdToken: data.opdToken || payload.opdToken };
     } else {
       console.warn('[SupabaseSync] /api/interviews/summary HTTP error:', res.status, res.statusText);
+      return { success: false, opdToken: payload.opdToken };
     }
-    return res.ok;
   } catch (err) {
     console.warn('Failed to finalize interview on backend:', err);
-    return false;
+    return { success: false, opdToken: payload.opdToken };
   }
 }
 
@@ -163,6 +193,42 @@ export async function uploadDocumentToBackend(
     console.warn('Failed to upload document to backend:', err);
     return document;
   }
+}
+
+// Update interview status (e.g. mark as diagnosed / completed)
+export async function updateInterviewStatusInBackend(
+  interviewId: string,
+  status: 'waiting' | 'in_consultation' | 'completed' | 'in_interview',
+  options?: {
+    physicianNotes?: string;
+    consultationOutcome?: string;
+    consultationTime?: string;
+    doctorSummary?: any;
+    doctorApproved?: boolean;
+  }
+): Promise<boolean> {
+  try {
+    const res = await fetch('/api/interviews/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        interviewId: toValidUUID(interviewId),
+        status,
+        physicianNotes: options?.physicianNotes,
+        consultationOutcome: options?.consultationOutcome,
+        consultationTime: options?.consultationTime,
+        doctorSummary: options?.doctorSummary,
+        doctorApproved: options?.doctorApproved,
+      }),
+    });
+    if (res.ok) {
+      console.log(`[SupabaseSync] Interview ${interviewId} status updated to ${status}`);
+      return true;
+    }
+  } catch (err) {
+    console.warn('[SupabaseSync] Error updating interview status in backend:', err);
+  }
+  return false;
 }
 
 // Fetch all live patient queue records from backend/Supabase

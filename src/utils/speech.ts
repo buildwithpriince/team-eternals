@@ -12,10 +12,11 @@ class SpeechService {
   private activeUtterance: SpeechSynthesisUtterance | null = null;
   private isAudioUnlocked: boolean = false;
   private activeAudioSource: AudioBufferSourceNode | null = null;
+  private activeUtteranceList: SpeechSynthesisUtterance[] = [];
 
   constructor() {
     if (typeof window !== 'undefined') {
-      // 1. Purge any stale legacy audio caches from localStorage
+      // 1. Purge legacy caches
       try {
         const keysToRemove: string[] = [];
         for (let i = 0; i < localStorage.length; i++) {
@@ -35,33 +36,25 @@ class SpeechService {
         this.initVoices();
       }
 
-      // 3. Attach one-time global user interaction listener to unlock audio on first touch/click
+      // 3. Attach global user interaction listeners to unlock audio
       const unlockHandler = () => {
         this.unlockAudio();
       };
       window.addEventListener('click', unlockHandler, { once: false, passive: true });
       window.addEventListener('touchstart', unlockHandler, { once: false, passive: true });
+      window.addEventListener('pointerdown', unlockHandler, { once: false, passive: true });
       window.addEventListener('keydown', unlockHandler, { once: false, passive: true });
     }
   }
 
   public unlockAudio(): void {
-    if (this.isAudioUnlocked) {
-      if (this.synth && this.synth.paused) {
-        try {
+    try {
+      if (this.synth) {
+        if (this.synth.paused) {
           this.synth.resume();
-        } catch {
-          // ignore
         }
       }
-      return;
-    }
-
-    try {
       this.getAudioContext();
-      if (this.synth) {
-        this.synth.resume();
-      }
       this.isAudioUnlocked = true;
     } catch {
       // ignore
@@ -181,7 +174,10 @@ class SpeechService {
 
       // Fallback if no specific hi voice is installed
       const anyHi = voices.find((v) => (v.lang || '').toLowerCase().startsWith('hi'));
-      return anyHi || this.lockedVoiceEn || voices[0];
+      if (anyHi) return anyHi;
+
+      // Check if Indian English voice is available as secondary fallback for Hindi
+      return this.lockedVoiceEn || voices[0];
     }
   }
 
@@ -213,7 +209,7 @@ class SpeechService {
     return this.audioContext;
   }
 
-  // Play an accessible, pleasant chime for user feedback
+  // Play an accessible chime without interfering with speech
   public playChime(type: 'gentle' | 'success' | 'alert' = 'gentle') {
     try {
       this.unlockAudio();
@@ -226,27 +222,27 @@ class SpeechService {
       const now = ctx.currentTime;
       if (type === 'gentle') {
         osc.frequency.setValueAtTime(440, now);
-        osc.frequency.exponentialRampToValueAtTime(880, now + 0.15);
+        osc.frequency.exponentialRampToValueAtTime(880, now + 0.12);
+        gain.gain.setValueAtTime(0.1, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+        osc.start(now);
+        osc.stop(now + 0.2);
+      } else if (type === 'success') {
+        osc.frequency.setValueAtTime(523.25, now);
+        osc.frequency.setValueAtTime(659.25, now + 0.08);
+        osc.frequency.setValueAtTime(783.99, now + 0.16);
         gain.gain.setValueAtTime(0.12, now);
         gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
         osc.start(now);
         osc.stop(now + 0.25);
-      } else if (type === 'success') {
-        osc.frequency.setValueAtTime(523.25, now);
-        osc.frequency.setValueAtTime(659.25, now + 0.1);
-        osc.frequency.setValueAtTime(783.99, now + 0.2);
-        gain.gain.setValueAtTime(0.15, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-        osc.start(now);
-        osc.stop(now + 0.35);
       } else if (type === 'alert') {
         osc.type = 'sawtooth';
         osc.frequency.setValueAtTime(800, now);
-        osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);
-        gain.gain.setValueAtTime(0.25, now);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
+        osc.frequency.exponentialRampToValueAtTime(600, now + 0.08);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
         osc.start(now);
-        osc.stop(now + 0.4);
+        osc.stop(now + 0.3);
       }
     } catch {
       // Audio context may fail on uninitiated interaction, gracefully ignore
@@ -270,6 +266,26 @@ class SpeechService {
   }
 
   /**
+   * Split long text into natural sentence chunks for instant Chromium synthesis
+   */
+  private splitIntoSentenceChunks(text: string): string[] {
+    const clean = this.cleanSpeechText(text);
+    if (!clean) return [];
+    if (clean.length <= 150) return [clean];
+
+    // Split by sentence terminators (periods, question marks, exclamation marks, or Hindi danda)
+    const sentences = clean.split(/(?<=[.?!।\n])\s+/).map((s) => s.trim()).filter(Boolean);
+    if (sentences.length <= 1) {
+      // Fallback: split by commas if very long single sentence
+      if (clean.length > 180) {
+        return clean.split(/(?<=[,])\s+/).map((s) => s.trim()).filter(Boolean);
+      }
+      return [clean];
+    }
+    return sentences;
+  }
+
+  /**
    * Speak function that executes INSTANTLY with zero latency (at the blink of an eye)
    * Guaranteed against Chromium garbage collection cancellation and queue deadlocks.
    */
@@ -285,8 +301,8 @@ class SpeechService {
       return;
     }
 
-    const cleanText = this.cleanSpeechText(text);
-    if (!cleanText) {
+    const chunks = this.splitIntoSentenceChunks(text);
+    if (chunks.length === 0) {
       if (onEnd) onEnd();
       return;
     }
@@ -318,133 +334,137 @@ class SpeechService {
       return;
     }
 
-    // 3. Clear existing speech queue
-    const hadActiveSpeech = this.synth.speaking || this.synth.pending || this.synth.paused;
-    if (hadActiveSpeech) {
-      try {
-        this.synth.cancel();
-      } catch {
-        // ignore
-      }
-    }
-
-    // Ensure speech synthesis is unpaused
+    // 3. Clear existing speech queue and immediately resume synth
     try {
+      this.synth.cancel();
       this.synth.resume();
     } catch {
       // ignore
     }
 
-    // 4. Schedule the new utterance with a micro-delay if a cancel was just issued
-    // This completely eliminates the Chromium cancel-and-speak race bug!
-    const delay = hadActiveSpeech ? 40 : 0;
+    const voices = this.synth.getVoices() || [];
+    if (!this.lockedVoiceEn || !this.lockedVoiceHi || voices.length > 0) {
+      this.lockedVoiceEn = this.findBestIndianVoice(voices, 'en');
+      this.lockedVoiceHi = this.findBestIndianVoice(voices, 'hi');
+    }
 
-    setTimeout(() => {
-      // If a newer speak request was dispatched in the meantime, discard this one
-      if (this.speakRequestId !== currentReq) {
+    const targetVoice = lang === 'hi' ? this.lockedVoiceHi : this.lockedVoiceEn;
+    const targetLang = targetVoice?.lang || (lang === 'hi' ? 'hi-IN' : 'en-IN');
+
+    // Setup sequential queue for chunks
+    this.activeUtteranceList = [];
+    let currentChunkIdx = 0;
+    let hasStartedOverall = false;
+
+    const startHeartbeat = () => {
+      if (this.keepAliveTimer) return;
+      this.keepAliveTimer = setInterval(() => {
+        if (this.synth) {
+          if (this.synth.paused) {
+            try {
+              this.synth.resume();
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }, 200);
+    };
+
+    const stopHeartbeat = () => {
+      if (this.keepAliveTimer) {
+        clearInterval(this.keepAliveTimer);
+        this.keepAliveTimer = null;
+      }
+    };
+
+    const speakNextChunk = () => {
+      if (this.speakRequestId !== currentReq) return;
+
+      if (currentChunkIdx >= chunks.length) {
+        // Finished all chunks
+        this.isCurrentlyPlaying = false;
+        this.activeUtterance = null;
+        stopHeartbeat();
+        if (onEnd) onEnd();
         return;
       }
 
-      const voices = this.synth?.getVoices() || [];
-      if (!this.lockedVoiceEn || !this.lockedVoiceHi) {
-        this.lockedVoiceEn = this.findBestIndianVoice(voices, 'en');
-        this.lockedVoiceHi = this.findBestIndianVoice(voices, 'hi');
-      }
-
-      const targetVoice = lang === 'hi' ? this.lockedVoiceHi : this.lockedVoiceEn;
-      const targetLang = lang === 'hi' ? 'hi-IN' : 'en-IN';
-
-      const utterance = new SpeechSynthesisUtterance(cleanText);
+      const chunkText = chunks[currentChunkIdx];
+      const utterance = new SpeechSynthesisUtterance(chunkText);
 
       if (targetVoice) {
         utterance.voice = targetVoice;
       }
       utterance.lang = targetLang;
-
-      // Natural speech cadence
       utterance.rate = lang === 'en' ? 1.0 : 0.95;
       utterance.pitch = 1.02;
       utterance.volume = 1.0;
 
-      // CRITICAL BUGFIX: Store utterance on class instance & global window
-      // so Chrome V8 Garbage Collector DOES NOT kill it during synthesis!
       this.activeUtterance = utterance;
+      this.activeUtteranceList.push(utterance);
       if (typeof window !== 'undefined') {
-        (window as any).__swasthyaActiveUtterance = utterance;
+        (window as any).__swasthyaUtteranceQueue = this.activeUtteranceList;
       }
-
-      let hasStarted = false;
-      let hasFinished = false;
-
-      const finishUtterance = (wasError = false) => {
-        if (hasFinished) return;
-        hasFinished = true;
-        this.isCurrentlyPlaying = false;
-        this.activeUtterance = null;
-        if (this.keepAliveTimer) {
-          clearInterval(this.keepAliveTimer);
-          this.keepAliveTimer = null;
-        }
-        if (wasError) {
-          if (onError) onError();
-        }
-        if (onEnd) onEnd();
-      };
 
       utterance.onstart = () => {
         if (this.speakRequestId !== currentReq) return;
-        hasStarted = true;
         this.isCurrentlyPlaying = true;
-        if (onStart) onStart();
-
-        // Safe watchdog: ensure Chrome doesn't freeze the speech queue
-        this.keepAliveTimer = setInterval(() => {
-          if (this.synth) {
-            if (this.synth.paused) {
-              this.synth.resume();
-            }
-          }
-        }, 3000);
+        if (!hasStartedOverall) {
+          hasStartedOverall = true;
+          if (onStart) onStart();
+        }
+        startHeartbeat();
       };
 
       utterance.onend = () => {
         if (this.speakRequestId !== currentReq) return;
-        finishUtterance(false);
+        currentChunkIdx += 1;
+        speakNextChunk();
       };
 
       utterance.onerror = (e) => {
         if (this.speakRequestId !== currentReq) return;
-        // Ignore canceled/interrupted if superseded
         if (e.error === 'canceled' || e.error === 'interrupted') {
-          finishUtterance(false);
+          return;
+        }
+        console.warn('[SpeechService] Utterance error on chunk:', e.error);
+        currentChunkIdx += 1;
+        if (currentChunkIdx < chunks.length) {
+          speakNextChunk();
         } else {
-          console.warn('[SpeechService] Utterance error:', e.error);
-          finishUtterance(true);
+          this.isCurrentlyPlaying = false;
+          stopHeartbeat();
+          if (onError) onError();
+          if (onEnd) onEnd();
         }
       };
 
       try {
         this.synth?.speak(utterance);
-        // Force immediate audio resume
         this.synth?.resume();
       } catch (err) {
         console.warn('[SpeechService] synth.speak threw:', err);
-        finishUtterance(true);
+        this.isCurrentlyPlaying = false;
+        stopHeartbeat();
+        if (onError) onError();
+        if (onEnd) onEnd();
       }
+    };
 
-      // Fallback timer: if browser never fires onstart within 3 seconds, unblock UI
-      setTimeout(() => {
-        if (!hasStarted && this.speakRequestId === currentReq && !hasFinished) {
-          try {
-            if (this.synth && this.synth.paused) {
-              this.synth.resume();
-            }
-          } catch {
-            // ignore
-          }
+    // Execute immediately without artificial delay
+    speakNextChunk();
+
+    // Fast watchdog: if onstart hasn't fired in 300ms, force resume
+    setTimeout(() => {
+      if (this.speakRequestId === currentReq && !hasStartedOverall && this.synth) {
+        try {
+          this.synth.resume();
+        } catch {
+          // ignore
         }
-      }, 3000);
-    }, delay);
+      }
+    }, 300);
   }
 
   public stop(): void {
@@ -464,11 +484,13 @@ class SpeechService {
     if (this.synth) {
       try {
         this.synth.cancel();
+        this.synth.resume();
       } catch {
         // ignore
       }
     }
     this.activeUtterance = null;
+    this.activeUtteranceList = [];
     this.isCurrentlyPlaying = false;
   }
 
